@@ -10,10 +10,90 @@ import re
 import numpy as np
 import pandas as pd
 import sklearn.covariance
+from scipy.optimize import minimize
+
+import datetime
 
 import bt
 from bt.core import Algo, AlgoStack, SecurityBase, is_zero
 
+from analysis.drawdowns import endpoint_mdd_lookup
+
+def pf_mu(weight, mu):
+    # if weight.shape != mu.shape:
+    #    raise Exception('Variables weight and mu must have same shape.')
+    # weight = weight.reshape(-1, 1)
+    # mu = mu.reshape(-1, 1)
+    # return np.dot(weight.T, mu).ravel()
+    return np.array([np.inner(weight, mu)])
+
+def pf_sigma(weight, cov):
+    # assert np.ndim(cov) == 2, 'Covariance matrix has to be 2-dimensional.'
+    # assert np.max(weight.shape) == cov.shape[0] == cov.shape[1], 'Shapes of weight and cov are not aligned.'
+    # sanity_checks.positive_semidefinite(matrix=cov)
+    # weight = weight.reshape(-1, 1)
+    # return np.sqrt(np.dot(weight.T, np.dot(cov, weight))).ravel()
+    weight = weight.ravel()  # Flattening the weight array to 1D
+    return np.sqrt(np.einsum('i,ij,j->', weight, cov, weight))
+
+
+
+def pf_moments(weight, mu, is_geo, cov):
+    assert isinstance(is_geo, bool), 'Variable is_geo has to be a boolean.'
+    assert np.ndim(cov) == 2, 'Covariance matrix has to be 2-dimensional.'
+    assert np.max(mu.shape) == cov.shape[0] == cov.shape[1],  'Shapes of mu and cov are not aligned.'
+    if np.ndim(weight) == 1:
+        assert weight.shape[0] == np.max(mu.shape), 'Shapes of weight and mu are not aligned.'
+        weight = weight.reshape(1, -1)
+    else:
+        assert np.ndim(weight) == 2, 'Variables weight has to be 2-dimensional.'
+        assert weight.shape[1] == np.max(mu.shape) != weight.shape[0], 'Variable weight cannot be a n x n matrix.'
+    if is_geo:
+        mu = mu + np.diag(cov) / 2
+    pf_mu_ = np.full(weight.shape[0], np.nan)
+    pf_sigma_ = np.full(weight.shape[0], np.nan)
+    for i in range(weight.shape[0]):
+        pf_mu_[i] = pf_mu(weight=weight[i, :], mu=mu.ravel())
+        pf_sigma_[i] = pf_sigma(weight=weight[i, :], cov=cov)
+    pf_geo_mu = pf_mu_ - np.square(pf_sigma_) / 2
+    naive_md, adjusted_md = endpoint_mdd_lookup(geo_mu=pf_geo_mu, sigma=pf_sigma_, frequency='M',
+                                                          percentile=5)
+    return {'arithmetic_mu': pf_mu_,
+            'geometric_mu': pf_geo_mu,
+            'sigma': pf_sigma_,
+            'naive_md': naive_md,
+            'adjusted_md': adjusted_md}
+
+
+def add_row_to_target_perm(tp, target_now, target_perm):
+    # Step 1: Extract Values
+    arithmetic_mu = tp.loc['arithmetic_mu'][0]
+    sigma = tp.loc['sigma']
+    naive_md, adjusted_md = tp.loc['md'][0][0], tp.loc['md'][1][0]
+
+    # Step 2: Create New Row
+    new_row = pd.DataFrame({
+        'arithmetic_mu': [arithmetic_mu],
+        'sigma': [sigma],
+        'naive_md': [naive_md],
+        'adjusted_md': [adjusted_md]
+    }, index=[target_now])
+
+    # Step 3: Append the Row
+    if target_perm.empty:
+        target_perm = new_row
+    else:
+        target_perm = pd.concat([target_perm, new_row])
+
+    return target_perm
+
+def filter_columns_based_return_availability(df, lookback=20):
+    for col in df.columns:
+        non_nan_count = df[col].count()
+
+        if non_nan_count < lookback:
+            df.drop(columns=[col], inplace=True)
+    return df
 
 def run_always(f):
     """
@@ -23,7 +103,6 @@ def run_always(f):
     """
     f.run_always = True
     return f
-
 
 class PrintDate(Algo):
 
@@ -422,9 +501,17 @@ class RunIfOutOfBounds(Algo):
         for cname in target.children:
             if cname in targets:
                 c = target.children[cname]
-                deviation = abs((c.weight - targets[cname]) / targets[cname])
-                if deviation > self.tolerance:
+
+                target_value = targets[cname]
+
+                if np.isclose(target_value, 0, atol=1e-8) and np.isclose(c.weight, 0, atol=1e-8):
+                    continue
+                elif np.isclose(target_value, 0, atol=1e-8) and not np.isclose(c.weight, 0, atol=1e-8):
                     return True
+                else:
+                    deviation = abs((c.weight - target_value) / target_value)
+                    if deviation > self.tolerance:
+                        return True
 
         if "cash" in target.temp:
             cash_deviation = abs(
@@ -435,6 +522,64 @@ class RunIfOutOfBounds(Algo):
 
         return False
 
+class RunIfOutOfTriggerThreshold(Algo):
+    """
+    This algo returns true if any of the target weights deviate by an amount greater
+    than tolerance. For example, it will be run if the tolerance is set to 0.5 and
+    a security grows from a target weight of 0.2 to greater than 0.3.
+
+    A strategy where rebalancing is performed quarterly or whenever any
+    security's weight deviates by more than 20% could be implemented by:
+
+        Or([runQuarterlyAlgo,runIfOutOfBoundsAlgo(0.2)])
+
+    Args:
+        * tolerance (float): Allowed deviation of each security weight.
+
+    Requires:
+        * Weights
+
+    """
+
+
+    def __init__(self, tolerance):
+        self.tolerance = float(tolerance)
+        super(RunIfOutOfTriggerThreshold, self).__init__()
+
+    def __call__(self, target):
+        if "weights" not in target.temp:
+            return True
+
+        mu_trigger = 0.001
+        md_trigger = 0.01
+
+        exp_rets = target.get_data('expected_returns').loc[target.now]
+        exp_rets.dropna(inplace=True)
+
+        const_covar = target.get_data('const_covar')
+
+        target_weights = target.temp["weights"]
+        current_weights = {cname: target.children[cname].weight for cname in target.children}
+
+        if len(current_weights) == 0:
+            return True
+
+        covar = const_covar.loc[list(exp_rets.index), list(exp_rets.index)]
+        covar *= 12
+
+        if len(np.array(list(current_weights.values()))) != len(exp_rets.to_numpy()):
+           return True
+
+        pf_moments_old = pf_moments(weight=np.array(list(current_weights.values())), mu=exp_rets.to_numpy(), is_geo=True, cov=covar.to_numpy())
+        pf_moments_new = pf_moments(weight=target_weights.to_numpy(), mu=exp_rets.to_numpy(), is_geo=True, cov=covar.to_numpy())
+        print(str(pf_moments_new['geometric_mu']) + ' vs ' + str(pf_moments_old['geometric_mu']))
+        print(str(pf_moments_new['adjusted_md']) + ' vs ' + str(pf_moments_old['adjusted_md']))
+        if (np.abs(pf_moments_new['adjusted_md']) < np.abs(pf_moments_old['adjusted_md']) - md_trigger) or \
+                (pf_moments_new['geometric_mu'] > pf_moments_old['geometric_mu'] + mu_trigger):
+            print('Update weights!')
+            return True
+
+        return False
 
 class RunEveryNPeriods(Algo):
 
@@ -1210,6 +1355,8 @@ class WeighERC(Algo):
         maximum_iterations=100,
         tolerance=1e-8,
         lag=pd.DateOffset(days=0),
+        additional_constraints=None,
+        const_covar=None,
     ):
         super(WeighERC, self).__init__()
         self.lookback = lookback
@@ -1220,6 +1367,8 @@ class WeighERC(Algo):
         self.maximum_iterations = maximum_iterations
         self.tolerance = tolerance
         self.lag = lag
+        self.additional_constraints = additional_constraints
+        self.const_covar = const_covar
 
     def __call__(self, target):
         selected = target.temp["selected"]
@@ -1234,6 +1383,8 @@ class WeighERC(Algo):
 
         t0 = target.now - self.lag
         prc = target.universe.loc[t0 - self.lookback : t0, selected]
+
+        prc = filter_columns_based_return_availability(prc)
         tw = bt.ffn.calc_erc_weights(
             prc.to_returns().dropna(),
             initial_weights=self.initial_weights,
@@ -1242,6 +1393,8 @@ class WeighERC(Algo):
             risk_parity_method=self.risk_parity_method,
             maximum_iterations=self.maximum_iterations,
             tolerance=self.tolerance,
+            additional_constraints=self.additional_constraints,
+            const_covar=self.const_covar,
         )
 
         target.temp["weights"] = tw.dropna()
@@ -1277,6 +1430,7 @@ class WeighMeanVar(Algo):
 
     def __init__(
         self,
+        expected_returns=None,
         lookback=pd.DateOffset(months=3),
         bounds=(0.0, 1.0),
         covar_method="ledoit-wolf",
@@ -1284,6 +1438,7 @@ class WeighMeanVar(Algo):
         lag=pd.DateOffset(days=0),
     ):
         super(WeighMeanVar, self).__init__()
+        self.expected_returns = expected_returns
         self.lookback = lookback
         self.lag = lag
         self.bounds = bounds
@@ -1303,16 +1458,195 @@ class WeighMeanVar(Algo):
 
         t0 = target.now - self.lag
         prc = target.universe.loc[t0 - self.lookback : t0, selected]
-        tw = bt.ffn.calc_mean_var_weights(
-            prc.to_returns().dropna(),
+        tw = bt.ffn.calc_mean_var_weights_target_md(
+            returns=prc.to_returns().dropna(),
+            exp_rets=self.expected_returns.loc[target.now],
+            target_md=0.30,
             weight_bounds=self.bounds,
             covar_method=self.covar_method,
-            rf=self.rf,
         )
 
         target.temp["weights"] = tw.dropna()
         return True
 
+class WeighTwoStage(Algo):
+    def __init__(
+        self,
+        lookback=pd.DateOffset(months=3),
+        initial_weights=None,
+        risk_weights=None,
+        covar_method="ledoit-wolf",
+        risk_parity_method="ccd",
+        maximum_iterations=100,
+        tolerance=1e-8,
+        lag=pd.DateOffset(days=0),
+        bounds=(0.0, 1.0),
+        additional_constraints=None,
+        mode="short_term",
+        return_factor=0.95,
+        target_md=0.27
+    ):
+        super(WeighTwoStage, self).__init__()
+        self.erc = WeighERC(
+            lookback,
+            initial_weights,
+            risk_weights,
+            covar_method,
+            risk_parity_method,
+            maximum_iterations,
+            tolerance,
+            lag,
+        )
+        self.lookback = lookback
+        self.initial_weights = initial_weights
+        self.risk_weights = risk_weights
+        self.covar_method = covar_method
+        self.risk_parity_method = risk_parity_method
+        self.maximum_iterations = maximum_iterations
+        self.tolerance = tolerance
+        self.lag = lag
+        self.bounds = bounds
+        self.additional_constraints = additional_constraints
+        self.mode = mode
+        self.return_factor = return_factor
+        self.target_md = target_md
+
+    def __call__(self, target):
+        expected_returns = target.get_data('expected_returns')
+        const_covar = target.get_data('const_covar')
+
+        selected = target.temp["selected"]
+        self.erc = WeighERC(
+            self.lookback,
+            self.initial_weights,
+            self.risk_weights,
+            self.covar_method,
+            self.risk_parity_method,
+            self.maximum_iterations,
+            self.tolerance,
+            self.lag,
+            self.additional_constraints,
+            const_covar.loc[selected, selected]
+        )
+        self.erc(target)
+        erc_weights = target.temp["weights"]
+
+        if len(selected) == 0:
+            target.temp["weights"] = {}
+            return True
+
+        if len(selected) == 1:
+            target.temp["weights"] = {selected[0]: 1.0}
+            return True
+
+        print(target.now)
+
+        t0 = target.now - self.lag
+        prc = target.universe.loc[t0 - self.lookback : t0, selected]
+        if self.mode == "long_term":
+            prc = filter_columns_based_return_availability(prc)
+        tw, tp = bt.ffn.calc_two_stage_weights_target_md(
+            returns=prc.to_returns().dropna(),
+            exp_rets=expected_returns.loc[target.now],
+            target_md=self.target_md,
+            epsilon=1-self.return_factor,
+            erc_weights=erc_weights,
+            weight_bounds=self.bounds,
+            additional_constraints=self.additional_constraints,
+            covar_method=self.covar_method,
+            const_covar=const_covar
+        )
+
+
+        target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
+        target.temp["weights"] = tw.dropna()
+
+        return True
+
+class WeighCurrentCAAF(Algo):
+    def __init__(
+        self,
+        lookback=pd.DateOffset(months=3),
+        initial_weights=None,
+        risk_weights=None,
+        covar_method="ledoit-wolf",
+        risk_parity_method="ccd",
+        maximum_iterations=100,
+        tolerance=1e-8,
+        lag=pd.DateOffset(days=0),
+        bounds=(0.0, 1.0),
+        additional_constraints=None,
+        mode="short_term",
+        return_factor=0.95,
+        target_md=0.4
+    ):
+        super(WeighCurrentCAAF, self).__init__()
+        self.lookback = lookback
+        self.initial_weights = initial_weights
+        self.risk_weights = risk_weights
+        self.covar_method = covar_method
+        self.risk_parity_method = risk_parity_method
+        self.maximum_iterations = maximum_iterations
+        self.tolerance = tolerance
+        self.lag = lag
+        self.bounds = bounds
+        self.additional_constraints = additional_constraints
+        self.mode = mode
+        self.return_factor = return_factor
+        self.target_md = target_md
+
+    def __call__(self, target):
+        expected_returns = target.get_data('expected_returns')
+        const_covar = target.get_data('const_covar')
+
+        selected = target.temp["selected"]
+        available_expected_returns = list(expected_returns.loc[target.now].dropna().index)
+        self.erc = WeighERC(
+            self.lookback,
+            self.initial_weights,
+            self.risk_weights,
+            self.covar_method,
+            self.risk_parity_method,
+            self.maximum_iterations,
+            self.tolerance,
+            self.lag,
+            self.additional_constraints,
+            const_covar.loc[available_expected_returns, available_expected_returns]
+        )
+        self.erc(target)
+        erc_weights = target.temp["weights"]
+
+        if len(selected) == 0:
+            target.temp["weights"] = {}
+            return True
+
+        if len(selected) == 1:
+            target.temp["weights"] = {selected[0]: 1.0}
+            return True
+
+        print(target.now)
+
+        t0 = target.now - self.lag
+
+        prc = target.universe.loc[t0 - self.lookback : t0, selected]
+        if self.mode == "short_term":
+            prc = filter_columns_based_return_availability(prc)
+
+        tw, tp = bt.ffn.calc_current_caaf_weights(
+            returns=prc.to_returns().dropna(),
+            exp_rets=expected_returns.loc[target.now],
+            target_md=self.target_md,
+            erc_weights=erc_weights,
+            weight_bounds=self.bounds,
+            additional_constraints=self.additional_constraints,
+            covar_method=self.covar_method,
+            const_covar=const_covar
+        )
+
+        target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
+        target.temp["weights"] = tw.dropna()
+
+        return True
 
 class WeighRandomly(Algo):
 
@@ -1882,7 +2216,6 @@ class RebalanceOverTime(Algo):
 
         return True
 
-
 class Require(Algo):
 
     """
@@ -1977,6 +2310,37 @@ class Or(Algo):
 
         return res
 
+class And(Algo):
+    """
+    Flow control Algo
+
+    It useful for combining multiple signals into one signal.
+    For example, we might want two different rebalance signals to work together:
+
+        runOnDateAlgo = bt.algos.RunOnDate(pdf.index[0]) # where pdf.index[0] is the first date in our time series
+        runMonthlyAlgo = bt.algos.RunMonthly()
+        andAlgo = And([runMonthlyAlgo,runOnDateAlgo])
+
+    andAlgo will return True if it is the first date and if it is 1st of the month
+
+    Args:
+        * list_of_algos: Iterable list of algos.
+          Runs each algo and
+          returns true if all algos return true.
+    """
+
+    def __init__(self, list_of_algos):
+        super(And, self).__init__()
+        self._list_of_algos = list_of_algos
+        return
+
+    def __call__(self, target):
+        res = True
+        for algo in self._list_of_algos:
+            tempRes = algo(target)
+            res = res & tempRes
+
+        return res
 
 class SelectTypes(Algo):
     """
@@ -2447,4 +2811,18 @@ class HedgeRisks(Algo):
             if np.isnan(notional) and self.throw_nan:
                 raise ValueError("%s has nan hedge notional" % security)
             target.transact(notional, security)
+        return True
+
+class ExpectedReturns(Algo):
+    def __init__(self, expected_returns):
+        self.expected_returns = expected_returns
+
+    def __call__(self, target):
+        return True
+
+class ConstantCovar(Algo):
+    def __init__(self, const_covar):
+        self.const_covar = const_covar
+
+    def __call__(self, target):
         return True

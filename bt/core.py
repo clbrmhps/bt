@@ -159,7 +159,7 @@ class Node(object):
                 if dc:  # deepcopy object for possible later reuse
                     c = deepcopy(c)
 
-                if isinstance(c, str):
+                if type(c) == str:
                     if c in self._universe_tickers:
                         raise ValueError("Child %s already exists" % c)
 
@@ -1594,7 +1594,7 @@ class SecurityBase(Node):
             i = 0
             last_q = q
             last_amount_short = full_outlay - amount
-            while not np.isclose(full_outlay, amount, rtol=0.0) and q != 0:
+            while not np.isclose(full_outlay, amount, rtol=1e-14) and q != 0:
                 dq_wout_considering_tx_costs = (full_outlay - amount) / (
                     self._price * self.multiplier
                 )

@@ -10,6 +10,18 @@ import numpy as np
 from matplotlib import pyplot as plt
 import pyprind
 
+def drop_initial_duplicates(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop initial rows with duplicated values, keeping the last of the duplicates.
+
+    Parameters:
+    - df (pd.DataFrame): Input DataFrame
+
+    Returns:
+    - pd.DataFrame: DataFrame with the initial duplicated rows removed
+    """
+    first_non_duplicate_index = df[~df.duplicated(keep='last')].index.min()
+    return df.loc[first_non_duplicate_index:]
 
 def run(*backtests):
     """
@@ -381,7 +393,7 @@ class Result(ffn.GroupStats):
     """
 
     def __init__(self, *backtests):
-        tmp = [pd.DataFrame({x.name: x.strategy.prices}) for x in backtests]
+        tmp = [pd.DataFrame({x.name: drop_initial_duplicates(x.strategy.prices)}) for x in backtests]
         super(Result, self).__init__(*tmp)
         self.backtest_list = backtests
         self.backtests = {x.name: x for x in backtests}
@@ -415,6 +427,8 @@ class Result(ffn.GroupStats):
             data = self.backtests[key].weights[filter]
         else:
             data = self.backtests[key].weights
+
+        data = drop_initial_duplicates(data)
 
         return data
 
@@ -454,6 +468,8 @@ class Result(ffn.GroupStats):
         else:
             data = self.backtests[key].security_weights
 
+        data = drop_initial_duplicates(data)
+
         return data
 
     def plot_security_weights(self, backtest=0, filter=None, figsize=(15, 5), **kwds):
@@ -489,7 +505,7 @@ class Result(ffn.GroupStats):
 
     def _get_backtest(self, backtest):
         # based on input order
-        if isinstance(backtest, int):
+        if type(backtest) == int:
             return self.backtest_list[backtest].name
 
         # default case assume ok
