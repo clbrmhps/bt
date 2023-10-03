@@ -79,14 +79,14 @@ set_clbrm_style(caaf_colors=True)
 import warnings
 warnings.simplefilter(action='default', category=RuntimeWarning)
 
-rdf = pd.read_excel("./data/2023-09-25 master_file_US.xlsx", sheet_name="cov")
+rdf = pd.read_excel("./data/2023-10-03 master_file_US.xlsx", sheet_name="cov")
 rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
 rdf.set_index('Date', inplace=True)
 # rdf.dropna(inplace=True)
 
 const_covar = rdf.cov()
 
-er = pd.read_excel("./data/2023-09-25 master_file_US.xlsx", sheet_name="expected_gross_return")
+er = pd.read_excel("./data/2023-10-03 master_file_US.xlsx", sheet_name="expected_gross_return")
 er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
 er.set_index('Date', inplace=True)
 # er.dropna(inplace=True)
