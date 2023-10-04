@@ -402,7 +402,7 @@ def update_graph(selected_date):
 # A function to update CAAF weight plot
 def update_caaf_weights_plot():
     df = weight_caaf.reset_index()  # your dataframe
-    fig_caaf = px.bar(df, x="Date", y=["Equities", "Gov Bonds", "Alternatives", "HY Credit", "Gold"], title="Current CAAF Weights", labels={'value': 'Asset Allocation'}, height=400, width=810)
+    fig_caaf = px.bar(df, x="Date", y=["Equities", "Gov Bonds", "Alternatives", "HY Credit", "Gold"], title="Current CAAF Weights", labels={'value': 'Asset Allocation'})
     fig_caaf.update_layout(bargap=0)
     for i, trace in enumerate(fig_caaf.data):
         trace_name = trace.name
@@ -413,7 +413,7 @@ def update_caaf_weights_plot():
 # A function to update Two-Stage weight plot
 def update_twostage_weights_plot():
     df = weight_twostage.reset_index()  # your dataframe
-    fig_twostage = px.bar(df, x="Date", y=["Equities", "Gov Bonds", "Alternatives", "HY Credit", "Gold"], title="Two Stage Weights", labels={'value': 'Asset Allocation'}, height=400, width=810)
+    fig_twostage = px.bar(df, x="Date", y=["Equities", "Gov Bonds", "Alternatives", "HY Credit", "Gold"], title="Two Stage Weights", labels={'value': 'Asset Allocation'})
     fig_twostage.update_layout(bargap=0)
     for i, trace in enumerate(fig_twostage.data):
         trace_name = trace.name

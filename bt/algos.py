@@ -70,13 +70,17 @@ def add_row_to_target_perm(tp, target_now, target_perm):
     arithmetic_mu = tp.loc['arithmetic_mu'][0]
     sigma = tp.loc['sigma']
     naive_md, adjusted_md = tp.loc['md'][0][0], tp.loc['md'][1][0]
+    enb = tp.loc['enb']
+    div_ratio_sqrd = tp.loc['div_ratio_sqrd']
 
     # Step 2: Create New Row
     new_row = pd.DataFrame({
         'arithmetic_mu': [arithmetic_mu],
         'sigma': [sigma],
         'naive_md': [naive_md],
-        'adjusted_md': [adjusted_md]
+        'adjusted_md': [adjusted_md],
+        'enb': [enb],
+        'div_ratio_sqrd': [div_ratio_sqrd]
     }, index=[target_now])
 
     # Step 3: Append the Row
@@ -1373,6 +1377,15 @@ class WeighERC(Algo):
     def __call__(self, target):
         selected = target.temp["selected"]
 
+        if self.const_covar is None and self.covar_method == "constant":
+            expected_returns = target.get_data('expected_returns')
+            const_covar = target.get_data('const_covar')
+            available_expected_returns = list(expected_returns.loc[target.now].dropna().index)
+
+            const_covar = const_covar.loc[available_expected_returns, available_expected_returns]
+        else:
+            const_covar = self.const_covar
+
         if len(selected) == 0:
             target.temp["weights"] = {}
             return True
@@ -1380,6 +1393,8 @@ class WeighERC(Algo):
         if len(selected) == 1:
             target.temp["weights"] = {selected[0]: 1.0}
             return True
+
+        print(target.now)
 
         t0 = target.now - self.lag
         prc = target.universe.loc[t0 - self.lookback : t0, selected]
@@ -1394,7 +1409,7 @@ class WeighERC(Algo):
             maximum_iterations=self.maximum_iterations,
             tolerance=self.tolerance,
             additional_constraints=self.additional_constraints,
-            const_covar=self.const_covar,
+            const_covar=const_covar,
         )
 
         target.temp["weights"] = tw.dropna()
@@ -1514,6 +1529,12 @@ class WeighTwoStage(Algo):
     def __call__(self, target):
         expected_returns = target.get_data('expected_returns')
         const_covar = target.get_data('const_covar')
+        target_md_var = target.get_data('target_md_var')
+
+        if self.target_md == "varying":
+            target_md = target_md_var[target.now.date().strftime("%Y-%m-%d")]
+        else:
+            target_md = self.target_md
 
         selected = target.temp["selected"]
         self.erc = WeighERC(
@@ -1526,7 +1547,6 @@ class WeighTwoStage(Algo):
             self.tolerance,
             self.lag,
             self.additional_constraints,
-            const_covar.loc[selected, selected]
         )
         self.erc(target)
         erc_weights = target.temp["weights"]
@@ -1548,7 +1568,7 @@ class WeighTwoStage(Algo):
         tw, tp = bt.ffn.calc_two_stage_weights_target_md(
             returns=prc.to_returns().dropna(),
             exp_rets=expected_returns.loc[target.now],
-            target_md=self.target_md,
+            target_md=target_md,
             epsilon=1-self.return_factor,
             erc_weights=erc_weights,
             weight_bounds=self.bounds,
@@ -1556,7 +1576,6 @@ class WeighTwoStage(Algo):
             covar_method=self.covar_method,
             const_covar=const_covar
         )
-
 
         target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
         target.temp["weights"] = tw.dropna()

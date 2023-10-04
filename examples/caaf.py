@@ -45,6 +45,40 @@ def rgb_to_tuple(rgb_str):
 # Convert the colors in color_mapping to tuples
 tuple_color_mapping = {key: rgb_to_tuple(value) for key, value in color_mapping.items()}
 
+def calculate_tracking_error(portfolio_returns, benchmark_returns):
+    diff_returns = portfolio_returns - benchmark_returns
+    tracking_error = np.sqrt(np.var(diff_returns, ddof=1))
+    return tracking_error
+
+def calculate_rolling_tracking_error(portfolio_returns, benchmark_returns, window=120):
+    """
+    Calculate 10-year rolling tracking error.
+
+    Parameters:
+    - portfolio_returns: Pandas Series of portfolio returns
+    - benchmark_returns: Pandas Series of benchmark returns
+    - window: Number of periods in rolling window, default is 120 for 10 years
+
+    Returns:
+    - Rolling Tracking Errors: Pandas Series
+    """
+    indices = []
+    rolling_tracking_errors = []
+
+    for i in range(len(portfolio_returns) - window + 1):
+        start_idx = portfolio_returns.index[i]
+        end_idx = portfolio_returns.index[i + window - 1]
+
+        sub_portfolio = portfolio_returns.loc[start_idx:end_idx]
+        sub_benchmark = benchmark_returns.loc[start_idx:end_idx]
+
+        te = calculate_tracking_error(sub_portfolio, sub_benchmark)
+
+        indices.append(end_idx)
+        rolling_tracking_errors.append(te)
+
+    return pd.Series(rolling_tracking_errors, index=indices)
+
 def plot_columns(dataframe):
     fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(10, 12))
     for i, column in enumerate(dataframe.columns):
@@ -79,17 +113,19 @@ set_clbrm_style(caaf_colors=True)
 import warnings
 warnings.simplefilter(action='default', category=RuntimeWarning)
 
-rdf = pd.read_excel("./data/2023-10-03 master_file_US.xlsx", sheet_name="cov")
+rdf = pd.read_excel("./data/2023-10-04 master_file_US.xlsx", sheet_name="cov")
 rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
 rdf.set_index('Date', inplace=True)
 # rdf.dropna(inplace=True)
 
 const_covar = rdf.cov()
 
-er = pd.read_excel("./data/2023-10-03 master_file_US.xlsx", sheet_name="expected_gross_return")
+er = pd.read_excel("./data/2023-10-04 master_file_US.xlsx", sheet_name="expected_gross_return")
 er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
 er.set_index('Date', inplace=True)
 # er.dropna(inplace=True)
+
+target_md = pd.read_csv("./data/portfolio_properties/Properties_CurrentCAAF_1.csv", index_col=0)['adjusted_md']
 
 if 'Cash' in er.columns:
     er.drop(columns=['Cash'], inplace=True)
@@ -132,7 +168,7 @@ weighTwoStageAlgo = bt.algos.WeighTwoStage(
     additional_constraints=additional_constraints,
     mode="long_term",
     return_factor=0.7,
-    target_md=0.275
+    target_md=0.25
 )
 
 weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
@@ -154,16 +190,27 @@ runMonthlyAlgo = bt.algos.RunMonthly(
     run_on_first_date=True,
     run_on_end_of_period=True
 )
-
 weights = pd.Series([0.4, 0.6], index=['Equities', 'Gov Bonds'])
 weigh4060Algo = bt.algos.WeighSpecified(**weights)
 
 weights = pd.Series([0.6, 0.4], index=['Equities', 'Gov Bonds'])
 weigh6040Algo = bt.algos.WeighSpecified(**weights)
 
-weightEquallyAlgo = bt.algos.WeighEqually()
+weighEquallyAlgo = bt.algos.WeighEqually()
 
 weighRandomlyAlgo = bt.algos.WeighRandomly()
+
+weighERC = bt.algos.WeighERC(
+    lookback=pd.DateOffset(months=1000),
+    initial_weights=None,
+    risk_weights=None,
+    covar_method="constant",
+    risk_parity_method="slsqp",
+    maximum_iterations=100,
+    tolerance=1e-4,
+    lag=pd.DateOffset(days=0),
+    additional_constraints=additional_constraints,
+)
 
 rebalAlgo = bt.algos.Rebalance()
 
@@ -182,21 +229,22 @@ strat_current_caaf = bt.Strategy("Current CAAF",
     [
         bt.algos.ExpectedReturns('expected_returns'),
         bt.algos.ConstantCovar('const_covar'),
-        bt.algos.RunAfterDate('1871-02-28'),
+        bt.algos.RunAfterDate('1875-01-31'),
         selectTheseAlgo,
         weighCurrentCAAFAlgo,
         # bt.algos.Or([bt.algos.RunOnce(), bt.algos.RunIfOutOfTriggerThreshold(tolerance)]),
         rebalAlgo
     ]
 )
-strat_current_caaf.perm["properties"] = pd.DataFrame()
+strat_current_caaf.perm["properties"] = pd.Data
+Frame()
 
 strat_two_stage = bt.Strategy(
     'TwoStage',
     [
         bt.algos.ExpectedReturns('expected_returns'),
         bt.algos.ConstantCovar('const_covar'),
-        bt.algos.RunAfterDate('1871-02-28'),
+        bt.algos.RunAfterDate('1875-01-31'),
         selectTheseAlgo,
         weighTwoStageAlgo,
         # bt.algos.Or([bt.algos.RunOnce(), bt.algos.RunIfOutOfTriggerThreshold(tolerance)]),
@@ -235,11 +283,23 @@ strat_equal = bt.Strategy(
 bt.algos.RunAfterDate('1871-02-28'),
         selectTheseAlgo,
         runMonthlyAlgo,
-        weightEquallyAlgo,
+        weighEquallyAlgo,
         rebalAlgo
     ]
 )
 strat_equal.perm["properties"] = pd.DataFrame()
+
+strat_erc = bt.Strategy(
+    'ERC',
+    [
+bt.algos.RunAfterDate('1871-02-28'),
+        selectTheseAlgo,
+        runMonthlyAlgo,
+        weighERCAlgo,
+        rebalAlgo
+    ]
+)
+strat_erc.perm["properties"] = pd.DataFrame()
 
 backtest_current_caaf = bt.Backtest(
      strat_current_caaf,
@@ -249,7 +309,8 @@ backtest_current_caaf = bt.Backtest(
 backtest_two_stage = bt.Backtest(
     strat_two_stage,
     pdf,
-    additional_data={'expected_returns': er, 'const_covar': const_covar},
+    additional_data={'expected_returns': er, 'const_covar': const_covar,
+                     'target_md_var': target_md},
 )
 backtest_4060 = bt.Backtest(
     strat_4060,
@@ -263,9 +324,15 @@ backtest_equal = bt.Backtest(
     strat_equal,
     pdf,
 )
+backtest_erc = bt.Backtest(
+    strat_erc,
+    pdf,
+    additional_data={'expected_returns': er, 'const_covar': const_covar},
+)
 
 start_time = time.time()
-res_target = bt.run(backtest_two_stage)
+res_target = bt.run(backtest_current_caaf, backtest_two_stage, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
+# res_target = bt.run(backtest_two_stage, backtest_current_caaf)
 
 # res_target = bt.run(backtest_two_stage)
 end_time = time.time()
@@ -309,13 +376,29 @@ def plot_stacked_area(df):
     # Show plot
     plt.show()
 
-plot_stacked_area(res_target.get_security_weights(0).loc[:, ["Equities", "Gov Bonds"]])
-plot_stacked_area(res_target.get_security_weights(1).loc[:, ["Equities", "Gov Bonds"]])
+
+plot_stacked_area(res_target.get_security_weights(0).loc[:, ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"]])
+plot_stacked_area(res_target.get_security_weights(1).loc[:, ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"]])
 plot_stacked_area(res_target.get_security_weights(2).loc[:, ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"]])
 plot_stacked_area(res_target.get_security_weights(3).loc[:, ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"]])
+plot_stacked_area(res_target.get_security_weights(4).loc[:, ["Equities", "Gov Bonds"]])
+plot_stacked_area(res_target.get_security_weights(5).loc[:, ["Equities", "Gov Bonds"]])
 
 plot_columns(res_target.backtests['Current CAAF'].strategy.perm['properties'])
 plot_columns(res_target.backtests['TwoStage'].strategy.perm['properties'])
+
+prices_twostage = res_target.prices.loc[:, "TwoStage"]
+prices_currentcaaf = res_target.prices.loc[:, "Current CAAF"]
+prices_4060 = res_target.prices.loc[:, "40/60"]
+prices_6040 = res_target.prices.loc[:, "60/40"]
+
+calculate_tracking_error(prices_currentcaaf.pct_change(), prices_4060.pct_change())
+calculate_tracking_error(prices_twostage.pct_change(), prices_4060.pct_change())
+
+calculate_rolling_tracking_error(prices_currentcaaf.pct_change(), prices_4060.pct_change()).plot()
+plt.show()
+calculate_rolling_tracking_error(prices_currentcaaf.pct_change(), prices_6040.pct_change()).plot()
+plt.show()
 
 ratio = res_target.prices.loc[:, "TwoStage"]/res_target.prices.loc[:, "Current CAAF"]
 ratio.plot()
@@ -340,10 +423,15 @@ plt.show()
 # Assuming res_target.get_security_weights(0) and res_target.get_security_weights(1) return DataFrames
 df1 = res_target.get_security_weights(0)
 df2 = res_target.get_security_weights(1)
+df5 = res_target.get_security_weights(2)
+df6 = res_target.get_security_weights(3)
+df7 = res_target.get_security_weights(4)
+df8 = res_target.get_security_weights(5)
 
 # Similarly for res_target.backtests['Current CAAF'].strategy.perm['properties'] and res_target.backtests['TwoStage'].strategy.perm['properties']
 df3 = res_target.backtests['Current CAAF'].strategy.perm['properties']
 df4 = res_target.backtests['TwoStage'].strategy.perm['properties']
+df9 = res_target.backtests['']
 
 # Save to the data folder with a timestamp
 df1.to_csv(f'data/security_weights/Security_Weights_CurrentCAAF_{version_number}.csv', index=True)

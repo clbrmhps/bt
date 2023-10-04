@@ -370,7 +370,7 @@ class Backtest(object):
         outlaysn = np.abs(outlays[outlays < 0].fillna(value=0).sum(axis=1))
 
         # merge and keep minimum
-        min_outlay = pd.DataFrame({"pos": outlaysp, "neg": outlaysn}).min(axis=1)
+        min_outlay = pd.DataFrame({"pos": outlaysp, "neg": outlaysn}).sum(axis=1)
 
         # turnover is defined as min outlay / nav
         mrg = pd.DataFrame({"outlay": min_outlay, "nav": s.values})
