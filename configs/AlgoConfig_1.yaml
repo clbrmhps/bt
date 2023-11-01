@@ -1,0 +1,48 @@
+weighERCAlgo:
+  lookback_months: 1000
+  covar_method: constant
+  risk_parity_method: slsqp
+  maximum_iterations: 100
+  tolerance: 1e-9
+  lag_months: 0
+
+additional_constraints: null
+
+weighTwoStageAlgo:
+  lookback_months: 1000
+  initial_weights: null
+  risk_weights: null
+  covar_method: constant
+  risk_parity_method: slsqp
+  maximum_iterations: 100
+  tolerance: 1e-4
+  lag_days: 0
+  bounds:
+    - 0.0
+    - 1.0
+  additional_constraints:
+    alternatives_upper_bound: 0.144
+    em_equities_upper_bound: 0.3
+    hy_credit_upper_bound: 0.086
+  mode: long_term
+  return_factor: 0.9
+  target_md: varying
+
+weighCurrentCAAFAlgo:
+  lookback_months: 1000
+  initial_weights: null
+  risk_weights: null
+  covar_method: constant
+  risk_parity_method: slsqp
+  maximum_iterations: 100
+  tolerance: 1e-4
+  lag_days: 0
+  bounds:
+    - 0.0
+    - 1.0
+  additional_constraints:
+    alternatives_upper_bound: 0.144
+    em_equities_upper_bound: 0.3
+    hy_credit_upper_bound: 0.086
+  mode: long_term
+  target_md: 0.35

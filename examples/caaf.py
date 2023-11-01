@@ -7,13 +7,26 @@ import time
 import plotly.express as px
 import webbrowser
 import re
-
-import ffn
+import warnings
 import bt
+import seaborn as sns
 
 from reporting.tools.style import set_clbrm_style
+set_clbrm_style(caaf_colors=True)
 
-version_number = 1
+warnings.simplefilter(action='default', category=RuntimeWarning)
+
+version_number = 2
+source_version_number = 2
+country = 'US'
+two_stage_target_md = "varying"
+
+# Version number 1: US Base two_stage target_md 0.27
+# Version number 2: US Base two_stage target_md "varying"
+# Version number 3: US
+
+################################################################################
+# Color Definition
 
 def rgb_to_hex(rgb_tuple):
     return f"#{int(rgb_tuple[0] * 255):02x}{int(rgb_tuple[1] * 255):02x}{int(rgb_tuple[2] * 255):02x}"
@@ -37,6 +50,14 @@ color_mapping = {
     "Gold": "rgb(216, 169, 23)"
 }
 
+color_palette = {
+    "Equities": (64/255, 75/255, 151/255),
+    "Gov Bonds": (144/255, 143/255, 74/255),
+    "Alternatives": (160/255, 84/255, 66/255),
+    "HY Credit": (154/255, 183/255, 235/255),
+    "Gold": (216/255, 169/255, 23/255)
+}
+
 def rgb_to_tuple(rgb_str):
     """Converts 'rgb(a, b, c)' string to a tuple of floats scaled to [0, 1]"""
     nums = re.findall(r'\d+', rgb_str)
@@ -44,6 +65,9 @@ def rgb_to_tuple(rgb_str):
 
 # Convert the colors in color_mapping to tuples
 tuple_color_mapping = {key: rgb_to_tuple(value) for key, value in color_mapping.items()}
+
+################################################################################
+# Function Definition
 
 def calculate_tracking_error(portfolio_returns, benchmark_returns):
     diff_returns = portfolio_returns - benchmark_returns
@@ -79,8 +103,8 @@ def calculate_rolling_tracking_error(portfolio_returns, benchmark_returns, windo
 
     return pd.Series(rolling_tracking_errors, index=indices)
 
-def plot_columns(dataframe):
-    fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(10, 12))
+def plot_columns(dataframe, method, country, version_number):
+    fig, axes = plt.subplots(nrows=6, ncols=1, figsize=(10, 12))
     for i, column in enumerate(dataframe.columns):
         ax = axes[i]
         ax.plot(dataframe.index, dataframe[column])
@@ -89,6 +113,9 @@ def plot_columns(dataframe):
         ax.set_ylabel("Value")
 
     plt.tight_layout()
+    if method is not None and country is not None and version_number is not None:
+        plt.savefig(f"./images/properties_{method}_{country}_{version_number}.png", dpi=300)
+
     plt.show()
 
 def percentage_formatter(x, pos):
@@ -108,24 +135,51 @@ def drop_initial_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     first_non_duplicate_index = df[~df.duplicated(keep='last')].index.min()
     return df.loc[first_non_duplicate_index:]
 
-set_clbrm_style(caaf_colors=True)
+################################################################################
+# Read in Files
 
-import warnings
-warnings.simplefilter(action='default', category=RuntimeWarning)
-
-rdf = pd.read_excel("./data/2023-10-04 master_file_US.xlsx", sheet_name="cov")
+rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
 rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
 rdf.set_index('Date', inplace=True)
 # rdf.dropna(inplace=True)
 
 const_covar = rdf.cov()
 
-er = pd.read_excel("./data/2023-10-04 master_file_US.xlsx", sheet_name="expected_gross_return")
+er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
 er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
 er.set_index('Date', inplace=True)
 # er.dropna(inplace=True)
 
-target_md = pd.read_csv("./data/portfolio_properties/Properties_CurrentCAAF_1.csv", index_col=0)['adjusted_md']
+def to_percent(y, position):
+    return f"{y * 100:.0f}%"
+
+plt.figure(figsize=(15, 6))
+sns.lineplot(data=er, dashes=False, palette=color_palette)
+plt.gca().yaxis.set_major_formatter(FuncFormatter(to_percent))
+plt.xlabel("Date")
+plt.ylabel("Expected Return")
+plt.title("Expected Returns of Asset Classes")
+plt.savefig(f'./images/expected_returns_asset_classes_{country}.png', format='png', dpi=300)
+plt.show()
+
+# Remove Expected Return for Gold until the Gold Standard
+# Kept it for the chart above
+er.loc[:"1973-01-31", "Gold"] = np.nan
+
+reference_properties = pd.read_csv(f"./data/portfolio_properties/Properties_CurrentCAAF_{source_version_number}.csv", index_col=0)
+target_md = reference_properties['adjusted_md']
+try:
+    efficient_frontier_two_stage = pd.read_pickle(f"./data/efficient_frontier_two_stage_{version_number}.pkl")
+    efficient_frontier_two_stage.set_index("Date", inplace=True)
+    efficient_frontier_two_stage.sort_index(inplace=True)
+except FileNotFoundError:
+    pass
+try:
+    efficient_frontier_current_caaf = pd.read_pickle(f"./data/efficient_frontier_current_caaf_{version_number}.pkl")
+    efficient_frontier_current_caaf.set_index("Date", inplace=True)
+    efficient_frontier_current_caaf.sort_index(inplace=True)
+except FileNotFoundError:
+    pass
 
 if 'Cash' in er.columns:
     er.drop(columns=['Cash'], inplace=True)
@@ -134,7 +188,15 @@ asset_class_subset = ['Equities', 'HY Credit', 'Gov Bonds', 'Gold',
                       'Alternatives']
 
 pdf = 100*np.cumprod(1+rdf)
-pdf.plot()
+# Melt the DataFrame to a long format which works better with seaborn
+pdf_melted = pdf.reset_index().melt(id_vars=['Date'], value_name='Price', var_name='Asset')
+
+# Plot using seaborn
+plt.figure(figsize=(15, 6))
+sns.lineplot(x='Date', y='Price', hue='Asset', data=pdf_melted, palette=color_palette)
+plt.yscale('log')  # Log scale
+plt.title('Asset Prices Over Time')
+plt.savefig(f'./images/asset_prices_{country}.png', format='png', dpi=300)
 plt.show()
 
 selectTheseAlgo = bt.algos.SelectThese(asset_class_subset)
@@ -167,8 +229,8 @@ weighTwoStageAlgo = bt.algos.WeighTwoStage(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    return_factor=0.8,
-    target_md=0.25
+    return_factor=0.9,
+    target_md=two_stage_target_md
 )
 
 weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
@@ -183,7 +245,7 @@ weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    target_md=0.35
+    target_md=0.4
 )
 
 runMonthlyAlgo = bt.algos.RunMonthly(
@@ -239,7 +301,7 @@ strat_current_caaf = bt.Strategy("Current CAAF",
 strat_current_caaf.perm["properties"] = pd.DataFrame()
 
 strat_two_stage = bt.Strategy(
-    'TwoStage',
+    'Two Stage',
     [
         bt.algos.ExpectedReturns('expected_returns'),
         bt.algos.ConstantCovar('const_covar'),
@@ -306,13 +368,22 @@ backtest_current_caaf = bt.Backtest(
      integer_positions=False,
      additional_data={'expected_returns': er , 'const_covar': const_covar},
  )
+
+additional_data = {
+    'expected_returns': er,
+    'const_covar': const_covar,
+    'target_md_var': target_md
+}
+
+if two_stage_target_md == "frontier":
+    additional_data['efficient_frontier'] = efficient_frontier_two_stage
+
 backtest_two_stage = bt.Backtest(
     strat_two_stage,
     pdf,
-    integer_positions=False,
-    additional_data={'expected_returns': er, 'const_covar': const_covar,
-                     'target_md_var': target_md},
+    additional_data=additional_data
 )
+
 backtest_4060 = bt.Backtest(
     strat_4060,
     pdf,
@@ -332,28 +403,21 @@ backtest_erc = bt.Backtest(
 )
 
 start_time = time.time()
-# res_target = bt.run(backtest_current_caaf, backtest_two_stage, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
-res_target = bt.run(backtest_two_stage)
+res_target = bt.run(backtest_current_caaf, backtest_two_stage, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
+# res_target = bt.run(backtest_current_caaf, backtest_two_stage)
+# res_target = bt.run(backtest_current_caaf)
 
 # res_target = bt.run(backtest_two_stage)
 end_time = time.time()
 print("Time elapsed: ", end_time - start_time)
 
-res_target.display()
-
-res_target.plot_histogram()
-plt.show()
-
-res_target.plot()
-plt.show()
-
-def plot_stacked_area(df):
+def plot_stacked_area(df, method=None, country=None, version_number=None):
     # Prepare data
     x = pd.to_datetime(df.index).to_numpy()
     y = df.to_numpy().T
 
     # Create plot and axes
-    fig, ax = plt.subplots(figsize=(15, 10))
+    fig, ax = plt.subplots(figsize=(18, 10))
 
     # Generate stackplot with colors from the tuple_color_mapping
     ax.stackplot(x, y, labels=df.columns, colors=[tuple_color_mapping[col] for col in df.columns], alpha=0.6)
@@ -366,6 +430,7 @@ def plot_stacked_area(df):
 
     # Format the y-axis as percentages
     ax.yaxis.set_major_formatter(FuncFormatter(percentage_formatter))
+    ax.set_ylim(0, 1)
 
     # Add legend
     handles, labels = ax.get_legend_handles_labels()
@@ -373,77 +438,108 @@ def plot_stacked_area(df):
 
     # Adjust layout to prevent clipping
     plt.tight_layout(rect=[0, 0, 0.85, 1])
-
+    if method is not None and country is not None and version_number is not None:
+        plt.savefig(f"./images/weights_{method}_{country}_{version_number}.png", dpi=300)
     # Show plot
     plt.show()
 
-# Using semilogy to plot on log scale
-plt.figure()
-plt.semilogy(res_target['TwoStage'].monthly_prices.index, res_target['TwoStage'].monthly_prices.values)
-plt.title('Log-Scale Price Chart')
-plt.xlabel('Time')
-plt.ylabel('Price')
+bt_keys = list(res_target.keys())
+
+# For plotting stacked areas based on get_security_weights
+for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40/60']:
+    if method in bt_keys:
+        columns_to_plot = ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
+        plot_stacked_area(res_target.get_security_weights(bt_keys.index(method)).loc[:, columns_to_plot], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
+
+# For plotting columns from res_target.backtests
+for method in ['Current CAAF', 'Two Stage']:
+    if method in res_target.backtests:
+        plot_columns(res_target.backtests[method].strategy.perm['properties'], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
+
+################################################################################
+# Price Plot
+
+# For extracting prices
+for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40'], ['prices_twostage', 'prices_currentcaaf', 'prices_4060', 'prices_6040']):
+    if method in res_target.prices.columns:
+        exec(f"{var_name} = res_target.prices.loc[:, '{method}']")
+
+# Initialize an empty DataFrame to store price series
+combined_prices = pd.DataFrame()
+
+# Loop through each portfolio methodology to extract and store prices
+for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40'], ['prices_twostage', 'prices_currentcaaf', 'prices_4060', 'prices_6040']):
+    if method in res_target.prices.columns:
+        exec(f"{var_name} = res_target.prices.loc[:, '{method}']")
+        exec(f"combined_prices['{method}'] = {var_name}")
+
+# Melt the DataFrame to long-format for Seaborn plotting
+combined_prices_long = combined_prices.reset_index().melt('index', var_name='Method', value_name='Prices')
+
+# Create figure and set size
+plt.figure(figsize=(14, 6))
+sns.lineplot(data=combined_prices_long, x='index', y='Prices', hue='Method')
+plt.yscale("log")
+plt.xlabel("Date")
+plt.savefig(f"./images/price_series_log_scale_{country}_{version_number}.png", dpi=300)
 plt.show()
 
-plot_stacked_area(res_target.get_security_weights(0).loc[:, ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"]])
-plot_stacked_area(res_target.get_security_weights(1).loc[:, ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"]])
-plot_stacked_area(res_target.get_security_weights(2).loc[:, ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"]])
-plot_stacked_area(res_target.get_security_weights(3).loc[:, ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"]])
-plot_stacked_area(res_target.get_security_weights(4).loc[:, ["Equities", "Gov Bonds"]])
-plot_stacked_area(res_target.get_security_weights(5).loc[:, ["Equities", "Gov Bonds"]])
+################################################################################
 
-plot_columns(res_target.backtests['Current CAAF'].strategy.perm['properties'])
-plot_columns(res_target.backtests['TwoStage'].strategy.perm['properties'])
+# Calculate tracking error if both methods in the pair are in bt_keys
+if 'Current CAAF' in bt_keys and '40/60' in bt_keys:
+    calculate_tracking_error(prices_currentcaaf.pct_change(), prices_4060.pct_change())
 
-prices_twostage = res_target.prices.loc[:, "TwoStage"]
-prices_currentcaaf = res_target.prices.loc[:, "Current CAAF"]
-prices_4060 = res_target.prices.loc[:, "40/60"]
-prices_6040 = res_target.prices.loc[:, "60/40"]
+if 'Two Stage' in bt_keys and '40/60' in bt_keys:
+    calculate_tracking_error(prices_twostage.pct_change(), prices_4060.pct_change())
 
-calculate_tracking_error(prices_currentcaaf.pct_change(), prices_4060.pct_change())
-calculate_tracking_error(prices_twostage.pct_change(), prices_4060.pct_change())
+# Calculate and plot rolling tracking error if both methods in the pair are in bt_keys
+if 'Current CAAF' in bt_keys and '40/60' in bt_keys:
+    calc_track_err = calculate_rolling_tracking_error(prices_currentcaaf.pct_change(), prices_4060.pct_change())
+    calc_track_err *= np.sqrt(12)
+    calc_track_err.plot()
+    plt.savefig(f"./images/rolling_tracking_error_current_caaf_40_60_{country}_{version_number}.png", dpi=300)
+    plt.show()
 
-calculate_rolling_tracking_error(prices_currentcaaf.pct_change(), prices_4060.pct_change()).plot()
-plt.show()
-calculate_rolling_tracking_error(prices_currentcaaf.pct_change(), prices_6040.pct_change()).plot()
-plt.show()
+if 'Current CAAF' in bt_keys and '60/40' in bt_keys:
+    calc_track_err = calculate_rolling_tracking_error(prices_currentcaaf.pct_change(), prices_6040.pct_change())
+    calc_track_err *= np.sqrt(12)
+    calc_track_err.plot()
+    plt.savefig(f"./images/rolling_tracking_error_current_caaf_60_40_{country}_{version_number}.png", dpi=300)
+    plt.show()
 
-ratio = res_target.prices.loc[:, "TwoStage"]/res_target.prices.loc[:, "Current CAAF"]
-ratio.plot()
-plt.show()
+if 'Current CAAF' in bt_keys and 'Two Stage' in bt_keys:
+    ratio = res_target.prices.loc[:, "Two Stage"]/res_target.prices.loc[:, "Current CAAF"]
+    ratio.plot()
+    plt.savefig(f"./images/ratio_plot_current_caaf_two_stage_{country}_{version_number}.png", dpi=300)
+    plt.show()
 
-transactions_df = res_target.get_transactions().reset_index()
+for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40/60']:
+    if method in bt_keys:
+        columns_to_plot = ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
+        transactions_df = res_target.get_transactions(method).reset_index()
 
-fig = px.line(transactions_df, x='Date', y='price', color='Security',
+        fig = px.line(transactions_df, x='Date', y='price', color='Security',
               color_discrete_map={'Equities': hex_colors[0], 'HY Credit': hex_colors[1], 'Gov Bonds': hex_colors[2], 'Gold': hex_colors[3], 'Alternatives': hex_colors[4]})
-fig.write_html("plot.html")
-webbrowser.open("plot.html")
+        fig.update_layout(yaxis_type="log")
+        fig.write_html(f"./images/transactions_{country}_{version_number}.html")
 
-fig = px.line(transactions_df, x='Date', y='quantity', color='Security',
+        fig = px.line(transactions_df, x='Date', y='quantity', color='Security',
               color_discrete_map={'Equities': hex_colors[0], 'HY Credit': hex_colors[1], 'Gov Bonds': hex_colors[2], 'Gold': hex_colors[3], 'Alternatives': hex_colors[4]})
-fig.write_html("plot.html")
-webbrowser.open("plot.html")
+        fig.write_html(f"./images/quantity_{country}_{version_number}.html")
 
-res_target.get_transactions().plot()
-plt.xticks(rotation=45)
-plt.show()
+# Define a list of portfolio methodologies and corresponding DataFrame variable names
+methodologies_weights = {'Current CAAF': 'current_caaf_weights', 'Two Stage': 'two_stage_weights', 'ERC': 'erc_weights', '60/40': 'weights_6040', '40/60': 'weights_4060'}
+methodologies_properties = {'Current CAAF': 'current_caaf_properties', 'Two Stage': 'two_stage_properties'}
 
-# Assuming res_target.get_security_weights(0) and res_target.get_security_weights(1) return DataFrames
-df1 = res_target.get_security_weights(0)
-df2 = res_target.get_security_weights(1)
-df5 = res_target.get_security_weights(2)
-df6 = res_target.get_security_weights(3)
-df7 = res_target.get_security_weights(4)
-df8 = res_target.get_security_weights(5)
+# Loop through methodologies to save security weights DataFrames
+for method, var_name in methodologies_weights.items():
+    if method in bt_keys:
+        exec(f"{var_name} = res_target.get_security_weights(bt_keys.index('{method}'))")
+        exec(f"{var_name}.to_csv(f'data/security_weights/Security_Weights_{method.replace(' ', '').replace('/', '')}_{country}_{version_number}.csv', index=True)")
 
-# Similarly for res_target.backtests['Current CAAF'].strategy.perm['properties'] and res_target.backtests['TwoStage'].strategy.perm['properties']
-df3 = res_target.backtests['Current CAAF'].strategy.perm['properties']
-df4 = res_target.backtests['TwoStage'].strategy.perm['properties']
-
-# Save to the data folder with a timestamp
-df1.to_csv(f'data/security_weights/Security_Weights_CurrentCAAF_{version_number}.csv', index=True)
-df2.to_csv(f'data/security_weights/Security_Weights_TwoStage_{version_number}.csv', index=True)
-df3.to_csv(f'data/portfolio_properties/Properties_CurrentCAAF_{version_number}.csv', index=True)
-df4.to_csv(f'data/portfolio_properties/Properties_TwoStage_{version_number}.csv', index=True)
-
-drop_initial_duplicates(res_target.backtest_list[0].strategy.outlays)
+# Loop through methodologies to save property DataFrames
+for method, var_name in methodologies_properties.items():
+    if method in bt_keys:
+        exec(f"{var_name} = res_target.backtests['{method}'].strategy.perm['properties']")
+        exec(f"{var_name}.to_csv(f'data/portfolio_properties/Properties_{method.replace(' ', '').replace('/', '')}_{country}_{version_number}.csv', index=True)")

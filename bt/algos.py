@@ -1540,6 +1540,13 @@ class WeighTwoStage(Algo):
 
         if self.target_md == "varying":
             target_md = target_md_var[target.now.date().strftime("%Y-%m-%d")]
+        elif self.target_md == "frontier":
+            efficient_frontier = target.get_data('efficient_frontier')
+            target_md = target_md_var[target.now.date().strftime("%Y-%m-%d")]
+            current_efficient_frontier = efficient_frontier.loc[target.now.date().strftime("%Y-%m-%d")].reset_index()
+            current_efficient_frontier['abs_diff'] = abs(current_efficient_frontier['adjusted_md'] - target_md)
+            min_diff_row = current_efficient_frontier.iloc[current_efficient_frontier['abs_diff'].idxmin()]
+            closest_sigma = min_diff_row['sigma']
         else:
             target_md = self.target_md
 
@@ -1567,22 +1574,37 @@ class WeighTwoStage(Algo):
             return True
 
         print(target.now)
+        if target.now.date() == datetime.date(1983, 2, 28):
+            print("Break")
 
         t0 = target.now - self.lag
         prc = target.universe.loc[t0 - self.lookback : t0, selected]
         if self.mode == "long_term":
             prc = filter_columns_based_return_availability(prc)
-        tw, tp = bt.ffn.calc_two_stage_weights_target_md(
-            returns=prc.to_returns().dropna(),
-            exp_rets=expected_returns.loc[target.now],
-            target_md=target_md,
-            epsilon=1-self.return_factor,
-            erc_weights=erc_weights,
-            weight_bounds=self.bounds,
-            additional_constraints=self.additional_constraints,
-            covar_method=self.covar_method,
-            const_covar=const_covar
-        )
+        if self.target_md != "frontier":
+            tw, tp = bt.ffn.calc_two_stage_weights(
+                returns=prc.to_returns().dropna(),
+                exp_rets=expected_returns.loc[target.now],
+                target_md=target_md,
+                epsilon=1-self.return_factor,
+                erc_weights=erc_weights,
+                weight_bounds=self.bounds,
+                additional_constraints=self.additional_constraints,
+                covar_method=self.covar_method,
+                const_covar=const_covar
+            )
+        elif self.target_md == "frontier":
+            tw, tp = bt.ffn.calc_two_stage_weights(
+                returns=prc.to_returns().dropna(),
+                exp_rets=expected_returns.loc[target.now],
+                target_volatility=closest_sigma,
+                epsilon=1-self.return_factor,
+                erc_weights=erc_weights,
+                weight_bounds=self.bounds,
+                additional_constraints=self.additional_constraints,
+                covar_method=self.covar_method,
+                const_covar=const_covar
+            )
 
         target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
         target.temp["weights"] = tw.dropna()
@@ -1651,6 +1673,8 @@ class WeighCurrentCAAF(Algo):
             return True
 
         print(target.now)
+        if target.now.date() == datetime.date(1984, 4, 30):
+            print("Break")
 
         t0 = target.now - self.lag
 
@@ -1666,7 +1690,8 @@ class WeighCurrentCAAF(Algo):
             weight_bounds=self.bounds,
             additional_constraints=self.additional_constraints,
             covar_method=self.covar_method,
-            const_covar=const_covar
+            const_covar=const_covar,
+            mode="optima"
         )
 
         target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
