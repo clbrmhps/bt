@@ -167,7 +167,7 @@ weighTwoStageAlgo = bt.algos.WeighTwoStage(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    return_factor=0.7,
+    return_factor=0.8,
     target_md=0.25
 )
 
@@ -236,8 +236,7 @@ strat_current_caaf = bt.Strategy("Current CAAF",
         rebalAlgo
     ]
 )
-strat_current_caaf.perm["properties"] = pd.Data
-Frame()
+strat_current_caaf.perm["properties"] = pd.DataFrame()
 
 strat_two_stage = bt.Strategy(
     'TwoStage',
@@ -256,7 +255,7 @@ strat_two_stage.perm["properties"] = pd.DataFrame()
 strat_4060 = bt.Strategy(
     '40/60',
     [
-        bt.algos.RunAfterDate('1871-02-28'),
+        bt.algos.RunAfterDate('1875-01-31'),
         selectTheseAlgo,
         runMonthlyAlgo,
         weigh4060Algo,
@@ -268,7 +267,7 @@ strat_4060.perm["properties"] = pd.DataFrame()
 strat_6040 = bt.Strategy(
     '60/40',
     [
-        bt.algos.RunAfterDate('1871-02-28'),
+        bt.algos.RunAfterDate('1875-01-31'),
         selectTheseAlgo,
         runMonthlyAlgo,
         weigh6040Algo,
@@ -280,7 +279,7 @@ strat_6040.perm["properties"] = pd.DataFrame()
 strat_equal = bt.Strategy(
     'Equal Weights',
     [
-bt.algos.RunAfterDate('1871-02-28'),
+bt.algos.RunAfterDate('1875-01-31'),
         selectTheseAlgo,
         runMonthlyAlgo,
         weighEquallyAlgo,
@@ -292,7 +291,7 @@ strat_equal.perm["properties"] = pd.DataFrame()
 strat_erc = bt.Strategy(
     'ERC',
     [
-bt.algos.RunAfterDate('1871-02-28'),
+bt.algos.RunAfterDate('1875-01-31'),
         selectTheseAlgo,
         runMonthlyAlgo,
         weighERCAlgo,
@@ -304,11 +303,13 @@ strat_erc.perm["properties"] = pd.DataFrame()
 backtest_current_caaf = bt.Backtest(
      strat_current_caaf,
      pdf,
+     integer_positions=False,
      additional_data={'expected_returns': er , 'const_covar': const_covar},
  )
 backtest_two_stage = bt.Backtest(
     strat_two_stage,
     pdf,
+    integer_positions=False,
     additional_data={'expected_returns': er, 'const_covar': const_covar,
                      'target_md_var': target_md},
 )
@@ -331,8 +332,8 @@ backtest_erc = bt.Backtest(
 )
 
 start_time = time.time()
-res_target = bt.run(backtest_current_caaf, backtest_two_stage, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
-# res_target = bt.run(backtest_two_stage, backtest_current_caaf)
+# res_target = bt.run(backtest_current_caaf, backtest_two_stage, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
+res_target = bt.run(backtest_two_stage)
 
 # res_target = bt.run(backtest_two_stage)
 end_time = time.time()
@@ -376,6 +377,13 @@ def plot_stacked_area(df):
     # Show plot
     plt.show()
 
+# Using semilogy to plot on log scale
+plt.figure()
+plt.semilogy(res_target['TwoStage'].monthly_prices.index, res_target['TwoStage'].monthly_prices.values)
+plt.title('Log-Scale Price Chart')
+plt.xlabel('Time')
+plt.ylabel('Price')
+plt.show()
 
 plot_stacked_area(res_target.get_security_weights(0).loc[:, ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"]])
 plot_stacked_area(res_target.get_security_weights(1).loc[:, ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"]])
@@ -431,7 +439,6 @@ df8 = res_target.get_security_weights(5)
 # Similarly for res_target.backtests['Current CAAF'].strategy.perm['properties'] and res_target.backtests['TwoStage'].strategy.perm['properties']
 df3 = res_target.backtests['Current CAAF'].strategy.perm['properties']
 df4 = res_target.backtests['TwoStage'].strategy.perm['properties']
-df9 = res_target.backtests['']
 
 # Save to the data folder with a timestamp
 df1.to_csv(f'data/security_weights/Security_Weights_CurrentCAAF_{version_number}.csv', index=True)
