@@ -563,7 +563,7 @@ class RunIfOutOfTriggerThreshold(Algo):
         const_covar = target.get_data('const_covar')
 
         target_weights = target.temp["weights"]
-        current_weights = {cname: target.children[cname].weight for cname in target.children}
+        current_weights = pd.Series({cname: target.children[cname].weight for cname in target.children})
 
         if len(current_weights) == 0:
             return True
@@ -571,11 +571,18 @@ class RunIfOutOfTriggerThreshold(Algo):
         covar = const_covar.loc[list(exp_rets.index), list(exp_rets.index)]
         covar *= 12
 
-        if len(np.array(list(current_weights.values()))) != len(exp_rets.to_numpy()):
-           return True
+        if current_weights.size != exp_rets.size:
+            return True
 
-        pf_moments_old = pf_moments(weight=np.array(list(current_weights.values())), mu=exp_rets.to_numpy(), is_geo=True, cov=covar.to_numpy())
-        pf_moments_new = pf_moments(weight=target_weights.to_numpy(), mu=exp_rets.to_numpy(), is_geo=True, cov=covar.to_numpy())
+        sorted_keys = sorted(exp_rets.index)
+        # Sort exp_rets based on its own keys
+        sorted_exp_rets = exp_rets.loc[sorted_keys]
+        # Filter and sort only the keys present in exp_rets
+        sorted_current_weights = current_weights.loc[current_weights.index.intersection(sorted_keys)].sort_index()
+        sorted_target_weights = target_weights.loc[target_weights.index.intersection(sorted_keys)].sort_index()
+
+        pf_moments_old = pf_moments(weight=sorted_current_weights.to_numpy(), mu=sorted_exp_rets.to_numpy(), is_geo=True, cov=covar.loc[sorted_keys, sorted_keys].to_numpy())
+        pf_moments_new = pf_moments(weight=sorted_target_weights.to_numpy(), mu=sorted_exp_rets.to_numpy(), is_geo=True, cov=covar.loc[sorted_keys, sorted_keys].to_numpy())
         print(str(pf_moments_new['geometric_mu']) + ' vs ' + str(pf_moments_old['geometric_mu']))
         print(str(pf_moments_new['adjusted_md']) + ' vs ' + str(pf_moments_old['adjusted_md']))
         if (np.abs(pf_moments_new['adjusted_md']) < np.abs(pf_moments_old['adjusted_md']) - md_trigger) or \

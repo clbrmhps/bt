@@ -365,6 +365,7 @@ strat_erc.perm["properties"] = pd.DataFrame()
 backtest_current_caaf = bt.Backtest(
      strat_current_caaf,
      pdf,
+     integer_positions=False,
      additional_data={'expected_returns': er , 'const_covar': const_covar},
  )
 
