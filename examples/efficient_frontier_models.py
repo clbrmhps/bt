@@ -82,7 +82,7 @@ import pandas as pd
 version_number = 2
 target_version_number = 3
 country = "US"
-model = "Current CAAF"
+model = "current_caaf"
 
 # Read the DataFrames from the saved CSV files
 weight_caaf = pd.read_csv(f'data/security_weights/Security_Weights_CurrentCAAF_{country}_{version_number}.csv', index_col=0)
@@ -113,6 +113,9 @@ const_covar = rdf.cov()
 er = pd.read_excel("./data/2023-10-26 master_file_US.xlsx", sheet_name="expected_gross_return")
 er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
 er.set_index('Date', inplace=True)
+# Remove Expected Return for Gold until the Gold Standard
+# Kept it for the chart above
+er.loc[:"1973-01-31", "Gold"] = np.nan
 
 from concurrent.futures import ProcessPoolExecutor
 import concurrent
@@ -133,7 +136,7 @@ def worker(date_chunk, rdf, er, const_covar):
                                                maximum_iterations=100,
                                                tolerance=1e-4,
                                                const_covar=const_covar.loc[current_er_assets, current_er_assets])
-                if model == "Current CAAF":
+                if model == "current_caaf":
                     weights, properties = calc_current_caaf_weights(returns=rdf,
                                                                     exp_rets=er.loc[current_date, :],
                                                                     target_volatility=target_volatility,
@@ -144,7 +147,7 @@ def worker(date_chunk, rdf, er, const_covar):
                                                                     mode="frontier"
                                                                    )
 
-                if model == "Two Stage":
+                if model == "two_stage":
                     weights, properties = calc_two_stage_weights(returns=rdf,
                                                                  exp_rets=er.loc[current_date, :],
                                                                  target_volatility=target_volatility,
@@ -210,7 +213,7 @@ if __name__ == '__main__':
 
     # Combine df_list into a single DataFrame
     final_df = pd.concat(df_list, ignore_index=True)
-    final_df.to_pickle(f"data/efficient_frontier_two_stage_{target_version_number}.pkl")
+    final_df.to_pickle(f"data/efficient_frontier_{model}_{target_version_number}.pkl")
 
 #    ##############################################################################
 #    ##############################################################################
