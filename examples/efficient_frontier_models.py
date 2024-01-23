@@ -152,7 +152,7 @@ def worker(date_chunk, rdf, er, const_covar):
                                                maximum_iterations=100,
                                                tolerance=1e-4,
                                                const_covar=const_covar.loc[current_er_assets, current_er_assets])
-                if model == "Current CAAF":
+                if model == "current_caaf":
                     weights, properties = calc_current_caaf_weights(returns=rdf,
                                                                     exp_rets=er.loc[current_date, :],
                                                                     target_volatility=target_volatility,
