@@ -87,7 +87,7 @@ warnings.simplefilter(action='default', category=RuntimeWarning)
 import pandas as pd
 
 # The timestamp you used while saving
-version_number = 3
+version_number = 5
 country = "US"
 
 # Read the DataFrames from the saved CSV files
@@ -305,7 +305,7 @@ app = dash.Dash(__name__)
 
 # App layout
 app.layout = html.Div([
-    dcc.Graph(id='graph-efficient-frontier'),
+    dcc.Graph(id='graph-efficient-frontier', style={'width': '100%', 'height': '750px'}),
     # html.Div([
     # dcc.Graph(id='graph-enb', style={'width': '100%', 'display': 'inline-block'}),
     # dcc.Graph(id='graph-adjusted_md', style={'width': '100%', 'display': 'inline-block'})
@@ -425,10 +425,10 @@ def update_graph(selected_date):
     fig.add_trace(main_points_trace, row=1, col=1)
     fig.add_trace(caaf_frontier_trace, row=1, col=1)
     fig.add_trace(twostage_frontier_trace, row=1, col=1)
-    fig.add_trace(go.Scatter(x=caaf_frontier_for_date["sigma"], y=caaf_frontier_for_date["enb"].values, mode='lines'), row=2, col=1)
-    fig.add_trace(go.Scatter(x=twostage_frontier_for_date["sigma"], y=twostage_frontier_for_date["enb"].values, mode='lines'), row=2, col=1)
-    fig.add_trace(go.Scatter(x=caaf_frontier_for_date["sigma"], y=caaf_frontier_for_date["adjusted_md"].values, mode='lines'), row=3, col=1)
-    fig.add_trace(go.Scatter(x=twostage_frontier_for_date["sigma"], y=twostage_frontier_for_date["adjusted_md"].values, mode='lines'), row=3, col=1)
+    fig.add_trace(go.Scatter(x=caaf_frontier_for_date["sigma"], y=caaf_frontier_for_date["enb"].values, mode='lines', name="Current CAAF Effective Number of Bets"), row=2, col=1)
+    fig.add_trace(go.Scatter(x=twostage_frontier_for_date["sigma"], y=twostage_frontier_for_date["enb"].values, mode='lines', name="Two Stage Effective Number of Bets"), row=2, col=1)
+    fig.add_trace(go.Scatter(x=caaf_frontier_for_date["sigma"], y=caaf_frontier_for_date["adjusted_md"].values, mode='lines', name="Current CAAF Adjusted MD"), row=3, col=1)
+    fig.add_trace(go.Scatter(x=twostage_frontier_for_date["sigma"], y=twostage_frontier_for_date["adjusted_md"].values, mode='lines', name="Two Stage Adjusted MD"), row=3, col=1)
     fig.add_trace(special_points_trace, row=1, col=1)
 
     # Create a new marker color list

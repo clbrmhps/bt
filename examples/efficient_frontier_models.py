@@ -1,7 +1,7 @@
 import warnings
 import time
 from itertools import chain
-
+import datetime
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -20,6 +20,7 @@ from reporting.tools.style import set_clbrm_style
 from ffn.core import calc_two_stage_weights
 from ffn.core import calc_current_caaf_weights
 from ffn.core import calc_erc_weights
+from ffn.core import calc_mv_weights
 
 def rgb_to_hex(rgb_tuple):
     return f"#{int(rgb_tuple[0] * 255):02x}{int(rgb_tuple[1] * 255):02x}{int(rgb_tuple[2] * 255):02x}"
@@ -79,40 +80,41 @@ warnings.simplefilter(action='default', category=RuntimeWarning)
 import pandas as pd
 
 # The timestamp you used while saving
-version_number = 2
-target_version_number = 3
+# version_number = 2
+target_version_number = 5
 country = "US"
-model = "Current CAAF"
+model = "Two Stage"
 
 # Read the DataFrames from the saved CSV files
-weight_caaf = pd.read_csv(f'data/security_weights/Security_Weights_CurrentCAAF_{country}_{version_number}.csv', index_col=0)
-weight_twostage = pd.read_csv(f'data/security_weights/Security_Weights_TwoStage_{country}_{version_number}.csv', index_col=0)
-properties_caaf = pd.read_csv(f'data/portfolio_properties/Properties_CurrentCAAF_{country}_{version_number}.csv', index_col=0)
-properties_twostage = pd.read_csv(f'data/portfolio_properties/Properties_TwoStage_{country}_{version_number}.csv', index_col=0)
+# weight_caaf = pd.read_csv(f'data/security_weights/Security_Weights_CurrentCAAF_{country}_{version_number}.csv', index_col=0)
+# weight_twostage = pd.read_csv(f'data/security_weights/Security_Weights_TwoStage_{country}_{version_number}.csv', index_col=0)
+# properties_caaf = pd.read_csv(f'data/portfolio_properties/Properties_CurrentCAAF_{country}_{version_number}.csv', index_col=0)
+# properties_twostage = pd.read_csv(f'data/portfolio_properties/Properties_TwoStage_{country}_{version_number}.csv', index_col=0)
 
-weight_caaf.index.name = 'Date'
-weight_twostage.index.name = 'Date'
-properties_caaf.index.name = 'Date'
-properties_twostage.index.name = 'Date'
+# weight_caaf.index.name = 'Date'
+# weight_twostage.index.name = 'Date'
+# properties_caaf.index.name = 'Date'
+# properties_twostage.index.name = 'Date'
 
-weight_caaf.index = pd.to_datetime(weight_caaf.index)
-weight_twostage.index = pd.to_datetime(weight_twostage.index)
-properties_caaf.index = pd.to_datetime(properties_caaf.index)
-properties_twostage.index = pd.to_datetime(properties_twostage.index)
+# weight_caaf.index = pd.to_datetime(weight_caaf.index)
+# weight_twostage.index = pd.to_datetime(weight_twostage.index)
+# properties_caaf.index = pd.to_datetime(properties_caaf.index)
+# properties_twostage.index = pd.to_datetime(properties_twostage.index)
 
-weight_caaf = weight_caaf.iloc[1:]
-weight_twostage = weight_twostage.iloc[1:]
+# weight_caaf = weight_caaf.iloc[1:]
+# weight_twostage = weight_twostage.iloc[1:]
 
-rdf = pd.read_excel("./data/2023-10-26 master_file_US.xlsx", sheet_name="cov")
+rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
 rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
 rdf.set_index('Date', inplace=True)
 # rdf.dropna(inplace=True)
 
 const_covar = rdf.cov()
 
-er = pd.read_excel("./data/2023-10-26 master_file_US.xlsx", sheet_name="expected_gross_return")
+er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
 er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
 er.set_index('Date', inplace=True)
+er.loc[:"1973-01-31", "Gold"] = np.nan
 
 from concurrent.futures import ProcessPoolExecutor
 import concurrent
@@ -120,11 +122,28 @@ import concurrent
 def worker(date_chunk, rdf, er, const_covar):
     df_list_chunk = []
     for current_date in date_chunk:
+        current_er_assets = er.loc[current_date, :].dropna().index
+
+        cov_matrix = const_covar.loc[current_er_assets, current_er_assets]
+        cov_matrix_scaled = cov_matrix * 12
+
+        inv_cov_matrix = np.linalg.inv(cov_matrix_scaled)
+        weights = np.dot(inv_cov_matrix, np.ones(len(cov_matrix_scaled)))
+        weights /= np.sum(weights)
+        port_variance = np.dot(weights.T, np.dot(cov_matrix_scaled, weights))
+        min_variance_std_dev = np.sqrt(port_variance)
+
+        variances = np.diag(cov_matrix_scaled)
+        max_variance = np.max(variances)
+        max_variance_std_dev = np.sqrt(max_variance)
+
+        initial_target_volatility_flag = True
+
         for target_volatility in np.arange(0.01, 0.20, 0.001):
+            if target_volatility < min_variance_std_dev or target_volatility > max_variance_std_dev:
+                continue
+
             try:
-
-                current_er_assets = er.loc[current_date, :].dropna().index
-
                 erc_weights = calc_erc_weights(returns=rdf,
                                                initial_weights=None,
                                                risk_weights=None,
@@ -144,15 +163,44 @@ def worker(date_chunk, rdf, er, const_covar):
                                                                     mode="frontier"
                                                                    )
 
+                    mv_weights, mv_properties = calc_mv_weights(returns=rdf,
+                                                                exp_rets=er.loc[current_date, :],
+                                                                target_volatility=properties["sigma"],
+                                                                covar_method="constant",
+                                                                const_covar=const_covar.loc[
+                                                                current_er_assets, current_er_assets],
+                                                               )
+
+                    properties["mv_arithmetic_mu"] = mv_properties["arithmetic_mu"]
+
+
                 if model == "Two Stage":
+                    if initial_target_volatility_flag:
+                        initial_weights_two_stage = None
+                        initial_target_volatility_flag = False
+                    else:
+                        initial_weights_two_stage = weights
+                        initial_weights_two_stage = None
+
                     weights, properties = calc_two_stage_weights(returns=rdf,
                                                                  exp_rets=er.loc[current_date, :],
                                                                  target_volatility=target_volatility,
                                                                  epsilon=0.1,
                                                                  erc_weights=erc_weights,
                                                                  covar_method="constant",
-                                                                 const_covar=const_covar
+                                                                 const_covar=const_covar,
+                                                                 initial_weights_two_stage=initial_weights_two_stage,
                                                                 )
+
+                    mv_weights, mv_properties = calc_mv_weights(returns=rdf,
+                                                                exp_rets=er.loc[current_date, :],
+                                                                target_volatility=target_volatility,
+                                                                covar_method="constant",
+                                                                const_covar=const_covar.loc[
+                                                                current_er_assets, current_er_assets],
+                                                               )
+
+                    properties["mv_arithmetic_mu"] = mv_properties["arithmetic_mu"]
 
                 # Flatten twostage_weights to a dictionary
                 weights_dict = weights.to_dict()
@@ -198,9 +246,21 @@ def worker(date_chunk, rdf, er, const_covar):
 
 if __name__ == '__main__':
     num_cores = 45
+    # num_cores = 1
     # Splitting the dates into chunks. If there are 100 dates and you have 4 cores, each chunk might contain 25 dates.
     date_chunks = np.array_split(er.index, num_cores)
 
+    #target_date = pd.to_datetime('2023-08-31')
+
+    # Find the position of the target date in the DatetimeIndex
+    # target_index = er.index.get_loc(target_date)
+
+    # Define chunk size
+    # chunk_size = 10
+
+    # Extract the date chunk
+    #date_chunks = [er.index[target_index:target_index + chunk_size]]
+    #date_chunks = [pd.DatetimeIndex(['1904-01-31'])]
     # Use ProcessPoolExecutor to parallelize
     df_list = []
     with ProcessPoolExecutor() as executor:
@@ -210,7 +270,7 @@ if __name__ == '__main__':
 
     # Combine df_list into a single DataFrame
     final_df = pd.concat(df_list, ignore_index=True)
-    final_df.to_pickle(f"data/efficient_frontier_two_stage_{target_version_number}.pkl")
+    final_df.to_pickle(f"data/efficient_frontier_{model.lower().replace(' ', '_')}_{target_version_number}.pkl")
 
 #    ##############################################################################
 #    ##############################################################################

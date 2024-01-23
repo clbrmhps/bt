@@ -36,8 +36,6 @@ def pf_sigma(weight, cov):
     weight = weight.ravel()  # Flattening the weight array to 1D
     return np.sqrt(np.einsum('i,ij,j->', weight, cov, weight))
 
-
-
 def pf_moments(weight, mu, is_geo, cov):
     assert isinstance(is_geo, bool), 'Variable is_geo has to be a boolean.'
     assert np.ndim(cov) == 2, 'Covariance matrix has to be 2-dimensional.'
@@ -64,7 +62,6 @@ def pf_moments(weight, mu, is_geo, cov):
             'naive_md': naive_md,
             'adjusted_md': adjusted_md}
 
-
 def add_row_to_target_perm(tp, target_now, target_perm):
     # Step 1: Extract Values
     arithmetic_mu = tp.loc['arithmetic_mu'][0]
@@ -80,8 +77,12 @@ def add_row_to_target_perm(tp, target_now, target_perm):
         'naive_md': [naive_md],
         'adjusted_md': [adjusted_md],
         'enb': [enb],
-        'div_ratio_sqrd': [div_ratio_sqrd]
+        'div_ratio_sqrd': [div_ratio_sqrd],
     }, index=[target_now])
+
+    if 'caaf_implied_epsilon' in tp.index:
+        caaf_implied_epsilon = tp.loc['caaf_implied_epsilon']
+        new_row['caaf_implied_epsilon'] = [caaf_implied_epsilon]
 
     # Step 3: Append the Row
     if target_perm.empty:
@@ -582,7 +583,7 @@ class RunIfOutOfTriggerThreshold(Algo):
         sorted_target_weights = target_weights.loc[target_weights.index.intersection(sorted_keys)].sort_index()
 
         pf_moments_old = pf_moments(weight=sorted_current_weights.to_numpy(), mu=sorted_exp_rets.to_numpy(), is_geo=True, cov=covar.loc[sorted_keys, sorted_keys].to_numpy())
-        pf_moments_new = pf_moments(weight=sorted_target_weights.to_numpy(), mu=sorted_exp_rets.to_numpy(), is_geo=True, cov=covar.loc[sorted_keys, sorted_keys].to_numpy())
+        pf_moments_new = pf_moments(weight=sorted_target_weights.to_numpy().astype(float), mu=sorted_exp_rets.to_numpy(), is_geo=True, cov=covar.loc[sorted_keys, sorted_keys].to_numpy())
         print(str(pf_moments_new['geometric_mu']) + ' vs ' + str(pf_moments_old['geometric_mu']))
         print(str(pf_moments_new['adjusted_md']) + ' vs ' + str(pf_moments_old['adjusted_md']))
         if (np.abs(pf_moments_new['adjusted_md']) < np.abs(pf_moments_old['adjusted_md']) - md_trigger) or \
@@ -1536,17 +1537,76 @@ class WeighTwoStage(Algo):
     def __call__(self, target):
         expected_returns = target.get_data('expected_returns')
         const_covar = target.get_data('const_covar')
-        target_md_var = target.get_data('target_md_var')
 
         if self.target_md == "varying":
+            target_md_var = target.get_data('target_md_var')
             target_md = target_md_var[target.now.date().strftime("%Y-%m-%d")]
         elif self.target_md == "frontier":
             efficient_frontier = target.get_data('efficient_frontier')
+            target_md_var = target.get_data('target_md_var')
             target_md = target_md_var[target.now.date().strftime("%Y-%m-%d")]
             current_efficient_frontier = efficient_frontier.loc[target.now.date().strftime("%Y-%m-%d")].reset_index()
             current_efficient_frontier['abs_diff'] = abs(current_efficient_frontier['adjusted_md'] - target_md)
             min_diff_row = current_efficient_frontier.iloc[current_efficient_frontier['abs_diff'].idxmin()]
             closest_sigma = min_diff_row['sigma']
+        elif self.target_md == "frontier_only":
+                target_sigma = 0.07
+
+                # Calculate the closest sigma on the Current CAAF Efficient Frontier
+                efficient_frontier_current_caaf = target.get_data('efficient_frontier_current_caaf').reset_index()
+                efficient_frontier_current_caaf_target_date = efficient_frontier_current_caaf.loc[efficient_frontier_current_caaf.loc[:, "Date"] == target.now]
+                abs_diff_current_caaf = abs(efficient_frontier_current_caaf_target_date['sigma'] - target_sigma)
+                min_diff_index_current_caaf = abs_diff_current_caaf.idxmin()
+                closest_row_current_caaf = efficient_frontier_current_caaf.loc[min_diff_index_current_caaf]
+
+                filtered_rows_current_caaf = efficient_frontier_current_caaf_target_date[efficient_frontier_current_caaf_target_date['sigma'] < target_sigma]
+                higher_mu_rows_current_caaf = filtered_rows_current_caaf[filtered_rows_current_caaf['arithmetic_mu'] > closest_row_current_caaf['arithmetic_mu']]
+
+                if not higher_mu_rows_current_caaf.empty:
+                    max_mu_index_current_caaf = higher_mu_rows_current_caaf['arithmetic_mu'].idxmax()
+                    closest_row_current_caaf = efficient_frontier_current_caaf.loc[max_mu_index_current_caaf]
+
+                # Calculate the closest sigma on the Two Stage Efficient Frontier
+                efficient_frontier = target.get_data('efficient_frontier').reset_index()
+                efficient_frontier_target_date = efficient_frontier.loc[efficient_frontier.loc[:, "Date"] == target.now]
+                abs_diff = abs(efficient_frontier_target_date['sigma'] - target_sigma)
+                min_diff_index = abs_diff.idxmin()
+                closest_row = efficient_frontier.loc[min_diff_index]
+
+                filtered_rows = efficient_frontier_target_date[efficient_frontier_target_date['sigma'] < target_sigma]
+                higher_mu_rows = filtered_rows[filtered_rows['arithmetic_mu'] > closest_row['arithmetic_mu']]
+
+                if not higher_mu_rows.empty:
+                    max_mu_index = higher_mu_rows['arithmetic_mu'].idxmax()
+                    closest_row = efficient_frontier.loc[max_mu_index]
+
+                # Adjust to Current CAAF Efficient Frontier if the difference is greater than 0.01
+                if abs(closest_row_current_caaf['sigma'] - closest_row['sigma']) > 0.0025:
+                    abs_diff = abs(efficient_frontier_target_date['sigma'] - closest_row_current_caaf['sigma'])
+                    min_diff_index = abs_diff.idxmin()
+                    closest_row = efficient_frontier.loc[min_diff_index]
+
+                tp = pd.Series({
+                    'arithmetic_mu': [closest_row['arithmetic_mu']],
+                    'sigma': closest_row['sigma'],
+                    'md': ([closest_row['naive_md']], [closest_row['adjusted_md']]),
+                    'enb': closest_row['enb'],
+                    'div_ratio_sqrd': closest_row['div_ratio_sqrd'],
+                    'caaf_implied_epsilon': (closest_row['mv_arithmetic_mu'] - closest_row['arithmetic_mu'])/closest_row['mv_arithmetic_mu']
+                })
+                if "HY Credit" in closest_row.index:
+                    tw = closest_row.loc[['Equities', 'Gov Bonds', 'HY Credit', 'Gold', 'Alternatives']]
+                else:
+                    tw = closest_row.loc[['Equities', 'Gov Bonds', 'Gold', 'Alternatives']]
+
+                target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
+                target.temp["weights"] = tw.dropna()
+
+                print(target.now)
+                if target.now.date() == datetime.date(1885, 1, 31):
+                    print("Break")
+
+                return True
         else:
             target_md = self.target_md
 
@@ -1646,6 +1706,43 @@ class WeighCurrentCAAF(Algo):
     def __call__(self, target):
         expected_returns = target.get_data('expected_returns')
         const_covar = target.get_data('const_covar')
+
+        if self.target_md == "frontier_only":
+            target_sigma = 0.07
+            efficient_frontier = target.get_data('efficient_frontier').reset_index()
+            efficient_frontier_target_date = efficient_frontier.loc[efficient_frontier.loc[:, "Date"]==target.now]
+            abs_diff = abs(efficient_frontier_target_date['sigma'] - target_sigma)
+            min_diff_index = abs_diff.idxmin()
+            closest_row = efficient_frontier.loc[min_diff_index]
+
+            filtered_rows = efficient_frontier_target_date[efficient_frontier_target_date['sigma'] < target_sigma]
+            higher_mu_rows = filtered_rows[filtered_rows['arithmetic_mu'] > closest_row['arithmetic_mu']]
+
+            if not higher_mu_rows.empty:
+                max_mu_index = higher_mu_rows['arithmetic_mu'].idxmax()
+                closest_row = efficient_frontier.loc[max_mu_index]
+
+            tp = pd.Series({
+                'arithmetic_mu': [closest_row['arithmetic_mu']],
+                'sigma': closest_row['sigma'],
+                'md': ([closest_row['naive_md']], [closest_row['adjusted_md']]),
+                'enb': closest_row['enb'],
+                'div_ratio_sqrd': closest_row['div_ratio_sqrd'],
+                'caaf_implied_epsilon': (closest_row['mv_arithmetic_mu'] - closest_row['arithmetic_mu'])/closest_row['mv_arithmetic_mu']
+            })
+            if "HY Credit" in closest_row.index:
+                tw = closest_row.loc[['Equities', 'Gov Bonds', 'HY Credit', 'Gold', 'Alternatives']]
+            else:
+                tw = closest_row.loc[['Equities', 'Gov Bonds', 'Gold', 'Alternatives']]
+
+            target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
+            target.temp["weights"] = tw.dropna()
+
+            print(target.now)
+            if target.now.date() == datetime.date(1885, 1, 31):
+                print("Break")
+
+            return True
 
         selected = target.temp["selected"]
         available_expected_returns = list(expected_returns.loc[target.now].dropna().index)

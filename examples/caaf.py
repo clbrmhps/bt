@@ -10,23 +10,35 @@ import re
 import warnings
 import bt
 import seaborn as sns
+from matplotlib.ticker import FuncFormatter
 
 from reporting.tools.style import set_clbrm_style
 set_clbrm_style(caaf_colors=True)
 
 warnings.simplefilter(action='default', category=RuntimeWarning)
 
-version_number = 2
-source_version_number = 2
+version_number = 5
+# source_version_number = 12
 country = 'US'
-two_stage_target_md = "varying"
+two_stage_target_md = "frontier_only"
 
 # Version number 1: US Base two_stage target_md 0.27
 # Version number 2: US Base two_stage target_md "varying"
-# Version number 3: US
+# Version number 3: US Base two_stage target_md "frontier"
+# Version number 4: Placeholder
+# Version number 5: US Frontier Only 7%
+# Version number 6: US Frontier Only 8%
+# Version number 7: US Frontier Only 9%
+# Version number 8: US Frontier Only 10%
+# Version number 9: US Frontier Only 7% Rebalancing Trigger
+# Version number 10: US Frontier Only 8% Rebalancing Trigger
+# Version number 11: US Frontier Only 9% Rebalancing Trigger
+# Version number 12: UK Base two_stage target_md "varying"
 
 ################################################################################
 # Color Definition
+def to_percentage(x, pos):
+    return '{:.1f}%'.format(x * 100)
 
 def rgb_to_hex(rgb_tuple):
     return f"#{int(rgb_tuple[0] * 255):02x}{int(rgb_tuple[1] * 255):02x}{int(rgb_tuple[2] * 255):02x}"
@@ -42,21 +54,37 @@ default_colors = [
 ]
 hex_colors = [rgb_to_hex(color) for color in default_colors]
 
-color_mapping = {
+if country == 'US':
+    color_mapping = {
     "Equities": "rgb(64, 75, 151)",
     "Gov Bonds": "rgb(144, 143, 74)",
     "Alternatives": "rgb(160, 84, 66)",
     "HY Credit": "rgb(154, 183, 235)",
     "Gold": "rgb(216, 169, 23)"
-}
+    }
+else:
+    color_mapping = {
+    "Equities": "rgb(64, 75, 151)",
+    "Gov Bonds": "rgb(144, 143, 74)",
+    "Alternatives": "rgb(160, 84, 66)",
+    "Gold": "rgb(216, 169, 23)"
+    }
 
-color_palette = {
+if country == 'US':
+    color_palette = {
     "Equities": (64/255, 75/255, 151/255),
     "Gov Bonds": (144/255, 143/255, 74/255),
     "Alternatives": (160/255, 84/255, 66/255),
     "HY Credit": (154/255, 183/255, 235/255),
     "Gold": (216/255, 169/255, 23/255)
-}
+    }
+else:
+    color_palette = {
+    "Equities": (64/255, 75/255, 151/255),
+    "Gov Bonds": (144/255, 143/255, 74/255),
+    "Alternatives": (160/255, 84/255, 66/255),
+    "Gold": (216/255, 169/255, 23/255)
+    }
 
 def rgb_to_tuple(rgb_str):
     """Converts 'rgb(a, b, c)' string to a tuple of floats scaled to [0, 1]"""
@@ -104,7 +132,7 @@ def calculate_rolling_tracking_error(portfolio_returns, benchmark_returns, windo
     return pd.Series(rolling_tracking_errors, index=indices)
 
 def plot_columns(dataframe, method, country, version_number):
-    fig, axes = plt.subplots(nrows=6, ncols=1, figsize=(10, 12))
+    fig, axes = plt.subplots(nrows=len(dataframe.columns), ncols=1, figsize=(10, 12))
     for i, column in enumerate(dataframe.columns):
         ax = axes[i]
         ax.plot(dataframe.index, dataframe[column])
@@ -144,6 +172,8 @@ rdf.set_index('Date', inplace=True)
 # rdf.dropna(inplace=True)
 
 const_covar = rdf.cov()
+const_covar_scaled = const_covar * 12
+const_covar_scaled.to_parquet("const_covar_scaled.parquet")
 
 er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
 er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
@@ -166,8 +196,8 @@ plt.show()
 # Kept it for the chart above
 er.loc[:"1973-01-31", "Gold"] = np.nan
 
-reference_properties = pd.read_csv(f"./data/portfolio_properties/Properties_CurrentCAAF_{source_version_number}.csv", index_col=0)
-target_md = reference_properties['adjusted_md']
+#reference_properties = pd.read_csv(f"./data/portfolio_properties/Properties_CurrentCAAF_{source_version_number}.csv", index_col=0)
+#target_md = reference_properties['adjusted_md']
 try:
     efficient_frontier_two_stage = pd.read_pickle(f"./data/efficient_frontier_two_stage_{version_number}.pkl")
     efficient_frontier_two_stage.set_index("Date", inplace=True)
@@ -184,8 +214,11 @@ except FileNotFoundError:
 if 'Cash' in er.columns:
     er.drop(columns=['Cash'], inplace=True)
 
-asset_class_subset = ['Equities', 'HY Credit', 'Gov Bonds', 'Gold',
+asset_class_subset = ['Equities', 'Gov Bonds', 'Gold',
                       'Alternatives']
+if country == 'US':
+    asset_class_subset += ['HY Credit']
+
 
 pdf = 100*np.cumprod(1+rdf)
 # Melt the DataFrame to a long format which works better with seaborn
@@ -245,7 +278,7 @@ weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    target_md=0.4
+    target_md=two_stage_target_md
 )
 
 runMonthlyAlgo = bt.algos.RunMonthly(
@@ -362,22 +395,26 @@ bt.algos.RunAfterDate('1875-01-31'),
 )
 strat_erc.perm["properties"] = pd.DataFrame()
 
+additional_data = {
+    'expected_returns': er,
+    'const_covar': const_covar,
+}
+if two_stage_target_md == "frontier_only":
+    additional_data['efficient_frontier'] = efficient_frontier_current_caaf
 backtest_current_caaf = bt.Backtest(
      strat_current_caaf,
      pdf,
      integer_positions=False,
-     additional_data={'expected_returns': er , 'const_covar': const_covar},
+     additional_data=additional_data,
  )
 
 additional_data = {
     'expected_returns': er,
     'const_covar': const_covar,
-    'target_md_var': target_md
 }
-
-if two_stage_target_md == "frontier":
+if two_stage_target_md == "frontier" or two_stage_target_md == "frontier_only":
     additional_data['efficient_frontier'] = efficient_frontier_two_stage
-
+    additional_data['efficient_frontier_current_caaf'] = efficient_frontier_current_caaf
 backtest_two_stage = bt.Backtest(
     strat_two_stage,
     pdf,
@@ -448,13 +485,34 @@ bt_keys = list(res_target.keys())
 # For plotting stacked areas based on get_security_weights
 for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40/60']:
     if method in bt_keys:
-        columns_to_plot = ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
+        if country == 'US':
+            columns_to_plot = ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
+        else:
+            columns_to_plot = ["Equities", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
         plot_stacked_area(res_target.get_security_weights(bt_keys.index(method)).loc[:, columns_to_plot], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
 
 # For plotting columns from res_target.backtests
 for method in ['Current CAAF', 'Two Stage']:
     if method in res_target.backtests:
+        current_df = res_target.backtests[method].strategy.perm['properties']
+
         plot_columns(res_target.backtests[method].strategy.perm['properties'], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
+
+        # Plotting
+        plt.figure(figsize=(10, 6))
+        plt.plot(current_df.index, current_df['caaf_implied_epsilon'])
+        plt.xlabel('Date')
+        plt.ylabel('CAAF Implied Epsilon')
+
+        # Set the formatter
+        formatter = FuncFormatter(to_percentage)
+        plt.gca().yaxis.set_major_formatter(formatter)
+
+        plt.title(f'{method} Implied Epsilon over time')
+        plt.grid(True)
+        plt.show()
+
+
 
 ################################################################################
 # Price Plot
@@ -514,19 +572,49 @@ if 'Current CAAF' in bt_keys and 'Two Stage' in bt_keys:
     plt.savefig(f"./images/ratio_plot_current_caaf_two_stage_{country}_{version_number}.png", dpi=300)
     plt.show()
 
+if 'Current CAAF' in bt_keys:# Compute the mean of the series
+    mean_turnover = backtest_current_caaf.turnover.mean()
+    ax = backtest_current_caaf.turnover.plot()
+    ax.text(0.95, 0.9, f'Mean: {mean_turnover:.2%}', transform=ax.transAxes,
+        verticalalignment='top', horizontalalignment='right',
+        fontsize=12)
+    plt.savefig(f"./images/turnover_current_caaf_{country}_{version_number}.png", dpi=300)
+    plt.show()
+
+if 'Two Stage' in bt_keys:
+    mean_turnover = backtest_two_stage.turnover.mean()
+    ax = backtest_two_stage.turnover.plot()
+    ax.text(0.95, 0.9, f'Mean: {mean_turnover:.2%}', transform=ax.transAxes,
+        verticalalignment='top', horizontalalignment='right',
+        fontsize=12)
+    plt.savefig(f"./images/turnover_two_stage_{country}_{version_number}.png", dpi=300)
+    plt.show()
+
 for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40/60']:
     if method in bt_keys:
-        columns_to_plot = ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
+        if country == 'US':
+            columns_to_plot = ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
+        else:
+            columns_to_plot = ["Equities", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
         transactions_df = res_target.get_transactions(method).reset_index()
 
-        fig = px.line(transactions_df, x='Date', y='price', color='Security',
+        if country == "US":
+            fig = px.line(transactions_df, x='Date', y='price', color='Security',
               color_discrete_map={'Equities': hex_colors[0], 'HY Credit': hex_colors[1], 'Gov Bonds': hex_colors[2], 'Gold': hex_colors[3], 'Alternatives': hex_colors[4]})
+        else:
+            fig = px.line(transactions_df, x='Date', y='price', color='Security',
+              color_discrete_map={'Equities': hex_colors[0], 'Gov Bonds': hex_colors[2], 'Gold': hex_colors[3], 'Alternatives': hex_colors[4]})
         fig.update_layout(yaxis_type="log")
         fig.write_html(f"./images/transactions_{country}_{version_number}.html")
 
-        fig = px.line(transactions_df, x='Date', y='quantity', color='Security',
+        if country == "US":
+            fig = px.line(transactions_df, x='Date', y='quantity', color='Security',
               color_discrete_map={'Equities': hex_colors[0], 'HY Credit': hex_colors[1], 'Gov Bonds': hex_colors[2], 'Gold': hex_colors[3], 'Alternatives': hex_colors[4]})
+        else:
+            fig = px.line(transactions_df, x='Date', y='quantity', color='Security',
+              color_discrete_map={'Equities': hex_colors[0], 'Gov Bonds': hex_colors[2], 'Gold': hex_colors[3], 'Alternatives': hex_colors[4]})
         fig.write_html(f"./images/quantity_{country}_{version_number}.html")
+
 
 # Define a list of portfolio methodologies and corresponding DataFrame variable names
 methodologies_weights = {'Current CAAF': 'current_caaf_weights', 'Two Stage': 'two_stage_weights', 'ERC': 'erc_weights', '60/40': 'weights_6040', '40/60': 'weights_4060'}

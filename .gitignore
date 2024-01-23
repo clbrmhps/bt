@@ -73,3 +73,13 @@ docs/source/.ipynb_checkpoints/
 
 # jupyter
 .ipynb_checkpoints
+*.png
+*.csv
+*.pkl
+*.png
+*.html
+const_covar_scaled.parquet
+cov_matrix_scaled.parquet
+data/efficient_frontier_current_caaf_3.pkl
+data/efficient_frontier_two_stage_3.pkl
+*.csv
