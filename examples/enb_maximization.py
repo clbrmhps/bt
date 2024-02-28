@@ -1,26 +1,23 @@
 # Standard library imports
 import os
-import time
 import warnings
 
 # Third-party library imports
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
+
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.ticker as mtick
 from matplotlib.ticker import FuncFormatter
 import plotly.express as px
 import seaborn as sns
-import dash
-from dash import dcc, html
-from dash.dependencies import Input, Output
-from scipy.optimize import minimize
+
 import bt
 import ffn
 from plotly.subplots import make_subplots
 from tqdm import tqdm  # Import tqdm
-
 
 # Local application/library specific imports
 from reporting.tools.style import set_clbrm_style
