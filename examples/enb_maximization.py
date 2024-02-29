@@ -18,6 +18,7 @@ import bt
 import ffn
 from plotly.subplots import make_subplots
 from tqdm import tqdm  # Import tqdm
+import cvxpy as cp
 
 # Local application/library specific imports
 from reporting.tools.style import set_clbrm_style
@@ -45,41 +46,6 @@ def rgb_to_hex(rgb_str):
     return '#{:02x}{:02x}{:02x}'.format(int(rgb[0]), int(rgb[1]), int(rgb[2]))
 
 hex_colors = {k: rgb_to_hex(v) for k, v in color_mapping.items()}
-
-def generate_multiplier(n):
-    # Convert the number to a string and find the position of the decimal point
-    n_str = str(n)
-    decimal_pos = n_str.find('.')
-
-    # If there's no decimal, the number is an integer, return 5
-    if decimal_pos == -1:
-        return 5
-
-    # Find the highest non-zero decimal place
-    d = 0
-    for digit in n_str[decimal_pos+1:]:
-        if digit != '0':
-            break
-        d += 1
-
-    # Create a number with a "1" at the highest non-zero decimal place
-    new_number = 1 / (10 ** (d + 1))
-
-    # Multiply by 1
-    new_number *= 5
-
-    return new_number
-
-def percentage_formatter(x, pos):
-    """Format y-axis values as percentages."""
-    return f"{100 * x:.0f}%"
-
-# Define a function to filter each group (date)
-def filter_rows(group):
-    max_arithmetic_mu = group['arithmetic_mu'].max() - 0.001
-    sigma_at_max_mu = group.loc[group['arithmetic_mu'].idxmax(), 'sigma']
-
-    return group[(group['arithmetic_mu'] >= max_arithmetic_mu) | (group['sigma'] <= sigma_at_max_mu)]
 
 def diversification_ratio_squared(w, sigma_port, standard_deviations):
     return (np.dot(w, standard_deviations) / sigma_port) ** 2
@@ -128,9 +94,6 @@ def weight_objective(weight, weight_ref, norm, delta=0.5):
             squared_loss = 0.5 * (diff ** 2)
             linear_loss = delta * (abs_diff - 0.5 * delta)
             return np.sum(np.where(is_small_error, squared_loss, linear_loss))
-
-def constraint_sum_to_one(x):
-    return np.sum(x) - 1  # The constraint sum of x_i should be 1
 
 def volatility_constraint(weights, covar, target_volatility):
     # portfolio volatility
@@ -196,12 +159,156 @@ def EffectiveBets_sc(x, Sigma, t_MT, laglambda, arithmetic_mu):
     _, scalar_matrix = EffectiveBets(x, Sigma, t_MT)
     return -scalar_matrix.item() - laglambda * np.matmul(np.transpose(x), arithmetic_mu)
 
+class MeanVarianceOptimizer:
+    def __init__(self, returns, cov_matrix, type="minimum_variance", method="cvxpy"):
+        self.returns = returns
+        self.assets = list(self.returns.index)
+        self.cov_matrix = cov_matrix
+        self.type = type
+        self.method = method
+        self.n_assets = len(returns)
+        self.equal_weight = np.array([1 / self.n_assets] * self.n_assets)
+
+        self.minvar_weights = self.construct_minimum_variance_portfolio()
+        self.minvar_return = self.calculate_portfolio_return(self.minvar_weights)
+        self.minvar_std_dev = np.sqrt(self.calculate_portfolio_variance(self.minvar_weights))
+
+        self.target_returns = np.linspace(self.minvar_return, max(returns))
+        # self.target_std_devs = np.linspace(self.minvar_std_dev, max(np.sqrt(np.diag(self.cov_matrix))))
+        self.target_std_devs = np.arange(0.05, 0.13, 0.0025)  # Adjust this range as needed
+
+    def calculate_portfolio_variance(self, weights):
+        return np.dot(weights.T, np.dot(self.cov_matrix, weights))
+
+    def calculate_portfolio_return(self, weights):
+        return np.dot(weights.T, self.returns)
+
+    def construct_minimum_variance_portfolio(self):
+        inv_cov_matrix = np.linalg.inv(self.cov_matrix)
+        ones = np.ones(self.n_assets)
+        weights = np.dot(inv_cov_matrix, ones) / np.dot(ones.T, np.dot(inv_cov_matrix, ones))
+        return weights
+
+    def construct_mean_variance_portfolio(self, target_return=None, target_std_dev=None):
+        if self.method == "cvxpy":
+            w = cp.Variable(self.n_assets)
+
+            # General constraints
+            constraint_weight = cp.sum(w) == 1
+            constraint_box = w >= 0
+
+            if self.type == "minimum_variance":
+                # Objective
+                objective = cp.Minimize(cp.quad_form(w, self.cov_matrix))
+
+                # Constraints
+                constraint_return = cp.sum(cp.multiply(w, self.returns)) == target_return
+                constraints = [constraint_weight, constraint_return, constraint_box]
+
+                try:
+                    problem = cp.Problem(objective, constraints)
+                    problem.solve()
+                except:
+                    print('Error in optimization')
+
+                return w.value if problem.status == 'optimal' else None
+        if self.method == "scipy":
+            # General constraints
+            bounds = [(0, 1) for _ in range(self.n_assets)]
+            sum_to_one_constraint = {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
+
+            if self.type == "minimum_variance":
+                # Constraints
+                constraints = (
+                      sum_to_one_constraint,
+                      {'type': 'eq', 'fun': lambda w: self.calculate_portfolio_return(w) - target_return}
+                )
+
+                result = minimize(
+                            lambda w: self.calculate_portfolio_variance(w),
+                            self.equal_weight,
+                            method='SLSQP',
+                            bounds=bounds,
+                            constraints=constraints,
+                            options={'maxiter': 10000, 'ftol': 1e-15}
+                )
+
+                return result.x
+            elif self.type == "maximum_return":
+                # Constraints
+                constraints = (
+                      sum_to_one_constraint,
+                      {'type': 'eq', 'fun': lambda w: np.sqrt(self.calculate_portfolio_variance(w)) - target_std_dev}
+                )
+
+                result = minimize(
+                            lambda w: -self.calculate_portfolio_return(w),
+                            self.equal_weight,
+                            method='SLSQP',
+                            bounds=bounds,
+                            constraints=constraints,
+                            options={'maxiter': 1000, 'ftol': 1e-15}
+                )
+
+                return result.x
+
+    def add_row_to_frontier(self, weights, target_value, df_frontier):
+        if weights is not None:
+            portfolio_return = self.calculate_portfolio_return(weights)
+            portfolio_variance = self.calculate_portfolio_variance(weights)
+            portfolio_std_dev = np.sqrt(portfolio_variance)
+            new_row = {
+                'Portfolio Return': portfolio_return,
+                'Portfolio Variance': portfolio_variance,
+                'Portfolio Std Dev': portfolio_std_dev,
+                'Target Value': target_value,
+                'Target Type': self.type,
+                **dict(zip(self.assets, weights))
+            }
+            return pd.concat([df_frontier, pd.DataFrame([new_row])], ignore_index=True)
+
+    def construct_frontier(self):
+        df_frontier = pd.DataFrame([])
+        targets = self.target_returns if self.type == "minimum_variance" else self.target_std_devs
+        for target_value in targets:
+            if self.type == "minimum_variance":
+                weights = self.construct_mean_variance_portfolio(target_return=target_value)
+            elif self.type == "maximum_return":
+                weights = self.construct_mean_variance_portfolio(target_std_dev=target_value)
+
+            df_frontier = self.add_row_to_frontier(weights, target_value, df_frontier)
+        return df_frontier
+
+def plot_efficient_frontiers(cvxpy_returns, cvxpy_stdevs, min_var_returns, min_var_stdevs, max_ret_returns, max_ret_stdevs, figsize=(10, 6)):
+    # Plot setup
+    plt.figure(figsize=figsize)
+
+    # Plot each efficient frontier
+    plt.plot(cvxpy_stdevs, cvxpy_returns, marker='o', label='Minimum Variance (CVXPY)')
+    plt.plot(min_var_stdevs, min_var_returns, marker='x', label='Minimum Variance (SciPy)')
+    plt.plot(max_ret_stdevs, max_ret_returns, marker='^', label='Maximum Return (SciPy)')
+
+    # Add labels and legend
+    plt.xlabel('Portfolio Standard Deviation')
+    plt.ylabel('Portfolio Return')
+    plt.title('Efficient Frontiers')
+    plt.legend()
+
+    # Display plot
+    plt.show()
+
+################################################################################
+# Configuration
 
 set_clbrm_style(caaf_colors=True)
 
-# The timestamp you used while saving
-version_number = 5
 country = "US"
+
+plots_dir = "./plots"
+os.makedirs(plots_dir, exist_ok=True)
+
+################################################################################
+# Data Import
 
 # Return data for the covariance matrix
 rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
@@ -215,14 +322,13 @@ er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
 er.set_index('Date', inplace=True)
 er.loc[:"1973-01-31", "Gold"] = np.nan
 
+# Construct and scale covariance matrix
 const_covar = rdf.cov()
 covar = const_covar * 12
 
-# Create a directory for plots if it doesn't exist
-plots_dir = "./plots"
-os.makedirs(plots_dir, exist_ok=True)
+################################################################################
+# Strategy Configuration
 
-# Define the start date
 start_date = pd.Timestamp('1973-08-31')
 dates = er.index.unique()[er.index.unique() >= start_date]
 
@@ -230,12 +336,11 @@ target_stdevs = np.arange(0.05, 0.13, 0.0025)  # Adjust this range as needed
 target_volatility = 0.07
 epsilon = 0.1
 
-# Iterate over each date in the index of er
-for current_date in dates:
-    # Replace 'selected_date' with 'current_date' in your code
-    # For example:
-    formatted_date = current_date.strftime('%Y%m%d')
+################################################################################
+# Date Iteration
 
+for current_date in dates:
+    formatted_date = current_date.strftime('%Y%m%d')
     print(current_date)
 
     selected_date = current_date
@@ -243,11 +348,14 @@ for current_date in dates:
 
     selected_covar = covar.loc[selected_assets, selected_assets]
     selected_er = er.loc[selected_date, selected_assets]
-    stds = np.sqrt(np.diag(selected_covar))
-    arithmetic_mu = selected_er + np.square(stds) / 2
+    selected_stds = np.sqrt(np.diag(selected_covar))
+    arithmetic_mu = selected_er + np.square(selected_stds) / 2
 
     t_mt = torsion(selected_covar, 'minimum-torsion', method='exact')
     x0 = np.full((len(selected_assets),), 1/len(selected_assets))
+
+    ############################################################################
+    # ERC Weights
 
     erc_weights = calc_erc_weights(returns=rdf,
                                    initial_weights=None,
@@ -258,155 +366,26 @@ for current_date in dates:
                                    tolerance=1e-10,
                                    const_covar=covar.loc[selected_assets, selected_assets])
 
-    stds = np.sqrt(np.diag(selected_covar))
-    arithmetic_mu = selected_er + np.square(stds) / 2
-
-    constraints = ({'type': 'eq', 'fun': constraint_sum_to_one},
-                   {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_volatility)})
-    bounds = [(0, 1) for _ in range(len(selected_assets))]  # Assuming x is already defined
-
     ################################################################################################
     # Mean Variance Optimization
 
-    import cvxpy as cp
-    import numpy as np
-    import math
+    optimizer = MeanVarianceOptimizer(arithmetic_mu, selected_covar, type="minimum_variance", method="cvxpy")
+    tmp_cvxpy = optimizer.construct_frontier()
 
-    # Initialize variables for optimization
-    w = cp.Variable(len(arithmetic_mu))
+    optimizer = MeanVarianceOptimizer(arithmetic_mu, selected_covar, type="minimum_variance", method="scipy")
+    tmp_min_var_scipy = optimizer.construct_frontier()
 
-    # Objective: Minimize portfolio variance
-    objective = cp.Minimize(cp.quad_form(w, selected_covar))
+    optimizer = MeanVarianceOptimizer(arithmetic_mu, selected_covar, type="maximum_return", method="scipy")
+    tmp_max_ret_scipy = optimizer.construct_frontier()
 
-    # Constraints
-    constraint_weight = cp.sum(w) == 1
-    constraint_box = w >= 0
+    cvxpy_returns = tmp_cvxpy['Portfolio Return']
+    cvxpy_stdevs = tmp_cvxpy['Portfolio Std Dev']
+    min_var_returns = tmp_min_var_scipy['Portfolio Return']
+    min_var_stdevs = tmp_min_var_scipy['Portfolio Std Dev']
+    max_ret_returns = tmp_max_ret_scipy['Portfolio Return']
+    max_ret_stdevs = tmp_max_ret_scipy['Portfolio Std Dev']
 
-    constraints = [constraint_weight, constraint_box]
-
-    # Solve the optimization problem
-    problem = cp.Problem(objective, constraints)
-    problem.solve()
-
-    # Check if the problem is solved successfully
-    if problem.status == cp.OPTIMAL:
-        # Portfolio weights for minimum variance
-        min_var_weights = w.value
-
-        # Calculate expected return for minimum variance portfolio
-        min_var_expected_return = np.sum(min_var_weights * arithmetic_mu)
-
-        print("Minimum Variance Portfolio Expected Return:", min_var_expected_return)
-
-    # Create a list of target returns to iterate over
-    target_returns = np.linspace(min_var_expected_return, max(arithmetic_mu), num=1000)
-
-    # Initialize an empty DataFrame to store the results
-    mv_df = pd.DataFrame()
-
-    for target_return in target_returns:
-        w = cp.Variable(len(arithmetic_mu))
-
-        # Objective: Minimize portfolio variance
-        objective = cp.Minimize(cp.quad_form(w, selected_covar))
-
-        # Constraints
-        constraint_weight = cp.sum(w) == 1
-        constraint_return = cp.sum(cp.multiply(w, arithmetic_mu)) == target_return
-        constraint_box = w >= 0
-
-        constraints = [constraint_weight, constraint_return, constraint_box]
-
-        try:
-            problem = cp.Problem(objective, constraints)
-            problem.solve()
-        except:
-            print('Error in optimization')
-            continue
-
-        # Record the results if the problem is solved successfully
-        if problem.status == cp.OPTIMAL:
-            portfolio_variance = problem.value
-            portfolio_std_dev = math.sqrt(portfolio_variance)
-
-            new_row = pd.DataFrame({
-                'Target Return': target_return,
-                'Portfolio Variance': portfolio_variance,
-                'Portfolio Std Dev': portfolio_std_dev,
-                **dict(zip(selected_assets, w.value))
-            }, index=[0])
-            mv_df = pd.concat([mv_df, new_row], ignore_index=True)
-
-    min_vals = np.zeros(len(selected_assets))
-    max_vals = np.ones(len(selected_assets))
-
-    ################################################################################
-    # Mean Variance Optimization Scipy
-
-    # mv_df = pd.DataFrame()
-
-    # for target_vol in target_stdevs:
-    #     constraints = (
-    #         {'type': 'eq', 'fun': constraint_sum_to_one},
-    #         {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_vol)}
-    #     )
-
-    #     result = minimize(
-    #         lambda w: -pf_mu(w, arithmetic_mu),  # We minimize the negative return to maximize the return
-    #         x0,
-    #         method='SLSQP',
-    #         bounds=bounds,
-    #         constraints=constraints,
-    #         options={'maxiter': 10_000, 'ftol': 1e-15}
-    #     )
-
-    #     target_return = -result.fun
-    #     mv_df = mv_df.append({'Target Vol': target_vol, 'Target Return': target_return,
-    #                         'Portfolio Variance': target_vol**2, 'Portfolio Std Dev': target_vol,
-    #                       **dict(zip(selected_assets, result.x))}, ignore_index=True)
-
-    # import pandas as pd
-    # import numpy as np
-    # from scipy.optimize import minimize
-
-
-    # def portfolio_variance(w, cov_matrix):
-    #     return w.T @ cov_matrix @ w
-
-
-    # def constraint_sum_to_one(w):
-    #     return np.sum(w) - 1
-
-    # def target_return_constraint(w, expected_returns, target_return):
-    #     return np.dot(w, expected_returns) - target_return
-
-
-    # mv_df = pd.DataFrame()
-    # x0 = np.array([1 / len(arithmetic_mu)] * len(arithmetic_mu))  # Initial guess
-    # bounds = [(0, 1) for _ in range(len(arithmetic_mu))]  # Non-negative weights
-
-    # for target_return in target_returns:
-    #     constraints = (
-    #         {'type': 'eq', 'fun': constraint_sum_to_one},
-    #         {'type': 'eq', 'fun': lambda w: target_return_constraint(w, arithmetic_mu, target_return)}
-    #     )
-
-    #     result = minimize(
-    #         lambda w: portfolio_variance(w, selected_covar),
-    #         x0,
-    #         method='SLSQP',
-    #         bounds=bounds,
-    #         constraints=constraints,
-    #         options={'maxiter': 10000, 'ftol': 1e-15}
-    #     )
-
-    #     if result.success:
-    #         portfolio_variance_var = result.fun
-    #         portfolio_std_dev = np.sqrt(portfolio_variance_var)
-    #         new_row = {'Target Return': target_return, 'Portfolio Variance': portfolio_variance_var,
-    #                    'Portfolio Std Dev': portfolio_std_dev, **dict(zip(selected_assets, result.x))}
-    #         mv_df = mv_df.append(new_row, ignore_index=True)
-
+    plot_efficient_frontiers(cvxpy_returns, cvxpy_stdevs, min_var_returns, min_var_stdevs, max_ret_returns, max_ret_stdevs)
 
     ################################################################################################
     # Weight Grid
