@@ -27,8 +27,8 @@ from plotly.subplots import make_subplots
 from meucci.EffectiveBets import EffectiveBets
 from meucci.torsion import torsion
 
-from portfolio_construction.calculations import pf_mu
-from portfolio_construction.calculations import pf_sigma
+from base_portfolio.calculations import pf_mu
+from base_portfolio.calculations import pf_sigma
 
 def rgb_to_hex(rgb_tuple):
     return f"#{int(rgb_tuple[0] * 255):02x}{int(rgb_tuple[1] * 255):02x}{int(rgb_tuple[2] * 255):02x}"

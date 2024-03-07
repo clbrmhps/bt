@@ -9,10 +9,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import matplotlib
 
+
 from portfolio_construction import calculations, optimization
-
-from examples.caaf import CAAF
-
 from reporting.tools.style import set_clbrm_style
 set_clbrm_style(caaf_colors=True)
 
@@ -149,21 +147,18 @@ color_mapping = {
 }
 
 extended_arithmetic_mu = np.array([0.06, 0.061, 0.06, 0.04, 0.02, 0.02])
-expected_returns = pd.Series(data=extended_arithmetic_mu,
-                             index=asset_names)
-
 extended_volatilities = np.array([0.1, 0.1, 0.15, 0.09, 0.05, 0.18])
+
 correlation_matrix = np.array([[ 1.  ,  0.99 ,  0.12,  0.15,  0.2 ,  0.1 ],
                                [ 0.99 ,  1.  ,  0.12,  0.15,  0.2 ,  0.1 ],
                                [ 0.12,  0.12,  1.  ,  0.52 ,  0.02, 0.04],
                                [ 0.15,  0.15,  0.52,  1.  ,  0.22,  0.00],
                                [ 0.2 ,  0.2 ,  0.02 , 0.22 ,  1.  , 0.02],
                                [ 0.1 ,  0.1 ,  0.04 , 0.00 ,  0.02 ,  1.  ]])
+
 volatility_outer_product = np.outer(extended_volatilities, extended_volatilities)
 extended_sigma = correlation_matrix * volatility_outer_product
-covariance_matrix = pd.DataFrame(data=extended_sigma,
-                                 columns=asset_names,
-                                 index=asset_names)
+
 
 # Updating the number of assets and bounds
 extended_n = len(extended_arithmetic_mu)
@@ -271,6 +266,8 @@ plt.xlabel('Anlageklasse', fontsize=14)
 plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
 plt.show()
 
+
+
 erc_weights = optimization.get_erc_weights(extended_sigma)
 df = pd.DataFrame({'Anlageklasse': asset_names, 'Gewicht': erc_weights})
 
@@ -296,19 +293,35 @@ portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_m
 
 df = pd.DataFrame({'Anlageklasse': asset_names, 'Gewicht': caam_weights})
 
-caaf = CAAF(expected_returns=expected_returns,
-     covariance_matrix=covariance_matrix, target_md=0.39)
-caam_weights = caaf.create_portfolio()
-
-df = pd.DataFrame(caam_weights).reset_index()
-df.columns = ['Anlageklasse', 'Gewicht']
-
 plt.figure(figsize=(10, 6))
 sns.barplot(x='Anlageklasse', y='Gewicht', data=df, palette=color_mapping_hex)
 plt.title('CAAF 1.0 Portfolio')
 plt.ylabel('Gewicht', fontsize=14)
 plt.xlabel('Anlageklasse', fontsize=14)
 plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
+plt.show()
+
+
+
+data = {
+    'Maximum ENB': maxenb_weights.values,  # Assuming maxenb_weights is a pd.Series from your code
+    'MV': mv_weights,  # Assuming mv_weights is a pd.Series from your code
+    'ERC': erc_weights,  # Assuming erc_weights is an array from your code
+    'CAAF 1.0': caam_weights,  # Assuming caam_weights is an array from your code
+}
+
+# Assuming asset_names is a list of "Anlageklassen" that matches the order in your weights
+df_combined = pd.DataFrame(data, index=asset_names)
+
+# Plotting the combined chart
+ax = df_combined.plot(kind='bar', figsize=(10, 6), width=0.8)
+plt.title('Portfolio Gewichte nach Anlageklasse')
+plt.ylabel('Gewicht')
+plt.xlabel('Anlageklasse')
+plt.xticks(rotation=45)  # Rotate labels to improve readability
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))  # Assuming to_percent is defined as before
+plt.legend(title='Portfoliokonstruktion')
+plt.tight_layout()  # Adjust layout to not cut off labels
 plt.show()
 
 
@@ -487,6 +500,30 @@ plt.ylabel('Gewicht', fontsize=14)
 plt.xlabel('Anlageklasse', fontsize=14)
 plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
 plt.show()
+
+
+
+data = {
+    'Maximum ENB': maxenb_weights.values,  # Assuming maxenb_weights is a pd.Series from your code
+    'MV': mv_weights,  # Assuming mv_weights is a pd.Series from your code
+    'ERC': erc_weights,  # Assuming erc_weights is an array from your code
+    'CAAF 1.0': caam_weights,  # Assuming caam_weights is an array from your code
+}
+
+# Assuming asset_names is a list of "Anlageklassen" that matches the order in your weights
+df_combined = pd.DataFrame(data, index=asset_names)
+
+# Plotting the combined chart
+ax = df_combined.plot(kind='bar', figsize=(10, 6), width=0.8)
+plt.title('Portfolio Gewichte nach Anlageklasse')
+plt.ylabel('Gewicht')
+plt.xlabel('Anlageklasse')
+plt.xticks(rotation=45)  # Rotate labels to improve readability
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))  # Assuming to_percent is defined as before
+plt.legend(title='Portfoliokonstruktion')
+plt.tight_layout()  # Adjust layout to not cut off labels
+plt.show()
+
 
 
 print("Break")

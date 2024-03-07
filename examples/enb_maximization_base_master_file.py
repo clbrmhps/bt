@@ -33,7 +33,8 @@ warnings.simplefilter(action='default', category=RuntimeWarning)
 
 # Color mapping from names to RGB strings
 color_mapping = {
-    "Equities": "rgb(64, 75, 151)",
+    "DM Equities": "rgb(64, 75, 151)",
+    "EM Equities": "rgb(131, 140, 202)",
     "Gov Bonds": "rgb(144, 143, 74)",
     "Alternatives": "rgb(160, 84, 66)",
     "HY Credit": "rgb(154, 183, 235)",
@@ -314,13 +315,13 @@ os.makedirs(plots_dir, exist_ok=True)
 # Data Import
 
 # Return data for the covariance matrix
-rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
+rdf = pd.read_excel(f"../data/master_file.xlsx", sheet_name="cov")
 rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
 rdf.set_index('Date', inplace=True)
 # rdf.dropna(inplace=True)
 
 # Expected return data
-er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
+er = pd.read_excel(f"../data/master_file.xlsx", sheet_name="expected_gross_return")
 er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
 er.set_index('Date', inplace=True)
 er.loc[:"1973-01-31", "Gold"] = np.nan
@@ -332,7 +333,7 @@ covar = const_covar * 12
 ################################################################################
 # Strategy Configuration
 
-start_date = pd.Timestamp('2023-08-31')
+start_date = pd.Timestamp('2020-01-31')
 dates = er.index.unique()[er.index.unique() >= start_date]
 
 target_stdevs = np.arange(0.05, 0.13, 0.0025)  # Adjust this range as needed
@@ -348,6 +349,8 @@ for current_date in dates:
 
     selected_date = current_date
     selected_assets = list(er.loc[selected_date].dropna().index)
+    selected_assets = ['DM Equities', 'EM Equities', 'HY Credit', 'Gov Bonds',
+                       'Gold', 'Alternatives']
 
     selected_covar = covar.loc[selected_assets, selected_assets]
     selected_er = er.loc[selected_date, selected_assets]
