@@ -82,6 +82,7 @@ const_covar_scaled.parquet
 cov_matrix_scaled.parquet
 data/efficient_frontier_current_caaf_3.pkl
 data/efficient_frontier_two_stage_3.pkl
+data/frontiers
+frontiers
 *.csv
-examples/adx_example.py
-examples/example.xlsx
+

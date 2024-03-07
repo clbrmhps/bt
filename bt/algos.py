@@ -62,29 +62,21 @@ def pf_moments(weight, mu, is_geo, cov):
             'naive_md': naive_md,
             'adjusted_md': adjusted_md}
 
-def add_row_to_target_perm(tp, target_now, target_perm):
-    # Step 1: Extract Values
-    arithmetic_mu = tp.loc['arithmetic_mu'][0]
-    sigma = tp.loc['sigma']
-    naive_md, adjusted_md = tp.loc['md'][0][0], tp.loc['md'][1][0]
-    enb = tp.loc['enb']
-    div_ratio_sqrd = tp.loc['div_ratio_sqrd']
+def add_row_to_target_perm(tp, target_now, target_perm, properties=['arithmetic_mu', 'sigma', 'naive_md', 'adjusted_md', 'enb', 'div_ratio_sqrd']):
+    new_row_data = {}
 
-    # Step 2: Create New Row
-    new_row = pd.DataFrame({
-        'arithmetic_mu': [arithmetic_mu],
-        'sigma': [sigma],
-        'naive_md': [naive_md],
-        'adjusted_md': [adjusted_md],
-        'enb': [enb],
-        'div_ratio_sqrd': [div_ratio_sqrd],
-    }, index=[target_now])
+    for prop in properties:
+        # Handle properties with nested structures differently
+        if prop == 'md':
+            naive_md, adjusted_md = tp.loc['md'][0][0], tp.loc['md'][1][0]
+            new_row_data['naive_md'] = [naive_md]
+            new_row_data['adjusted_md'] = [adjusted_md]
+        else:
+            value = tp.loc[prop] if prop in tp.index else None
+            new_row_data[prop] = value
 
-    if 'caaf_implied_epsilon' in tp.index:
-        caaf_implied_epsilon = tp.loc['caaf_implied_epsilon']
-        new_row['caaf_implied_epsilon'] = [caaf_implied_epsilon]
+    new_row = pd.DataFrame(new_row_data, index=[target_now])
 
-    # Step 3: Append the Row
     if target_perm.empty:
         target_perm = new_row
     else:
@@ -1671,6 +1663,115 @@ class WeighTwoStage(Algo):
 
         return True
 
+class WeighMaxDiv(Algo):
+    def __init__(
+        self,
+        lookback=pd.DateOffset(months=3),
+        initial_weights=None,
+        risk_weights=None,
+        covar_method="ledoit-wolf",
+        risk_parity_method="ccd",
+        maximum_iterations=100,
+        tolerance=1e-8,
+        lag=pd.DateOffset(days=0),
+        bounds=(0.0, 1.0),
+        additional_constraints=None,
+        mode="short_term",
+        return_factor=0.95,
+        target_md=0.4
+    ):
+        super(WeighMaxDiv, self).__init__()
+        self.lookback = lookback
+        self.initial_weights = initial_weights
+        self.risk_weights = risk_weights
+        self.covar_method = covar_method
+        self.risk_parity_method = risk_parity_method
+        self.maximum_iterations = maximum_iterations
+        self.tolerance = tolerance
+        self.lag = lag
+        self.bounds = bounds
+        self.additional_constraints = additional_constraints
+        self.mode = mode
+        self.return_factor = return_factor
+        self.target_md = target_md
+
+    def __call__(self, target):
+        expected_returns = target.get_data('expected_returns')
+        const_covar = target.get_data('const_covar')
+
+        selected = target.temp["selected"]
+        available_expected_returns = list(expected_returns.loc[target.now].dropna().index)
+        self.erc = WeighERC(
+            self.lookback,
+            self.initial_weights,
+            self.risk_weights,
+            self.covar_method,
+            self.risk_parity_method,
+            self.maximum_iterations,
+            self.tolerance,
+            self.lag,
+            self.additional_constraints,
+            const_covar.loc[available_expected_returns, available_expected_returns]
+        )
+        self.erc(target)
+        erc_weights = target.temp["weights"]
+
+        if len(selected) == 0:
+            target.temp["weights"] = {}
+            return True
+
+        if len(selected) == 1:
+            target.temp["weights"] = {selected[0]: 1.0}
+            return True
+
+        print(target.now)
+        if target.now.date() == datetime.date(1984, 4, 30):
+            print("Break")
+
+        t0 = target.now - self.lag
+
+        prc = target.universe.loc[t0 - self.lookback : t0, selected]
+        if self.mode == "short_term":
+            prc = filter_columns_based_return_availability(prc)
+
+        ########################################################################
+        # Test
+
+        config = 2
+        self.target_vol = 0.07
+
+        year = target.now.year
+        month = target.now.month
+        day = target.now.day
+
+        # Format into 'YYYYMMDD'
+        formatted_date = f"{year}{month:02d}{day:02d}"
+        model_data = pd.read_pickle(f"./data/frontiers/config_{config}/enb_{formatted_date}")
+
+        closest_index = (model_data['Sigma'] - self.target_vol).abs().idxmin()
+        closest_row = model_data.loc[closest_index]
+
+        tp = pd.Series({
+            'arithmetic_mu': [closest_row['Return']],
+            'sigma': closest_row['Sigma'],
+            'enb': closest_row['ENB'],
+        })
+
+        all_asset_classes = ['Equities', 'HY Credit', 'Gov Bonds', 'Gold', 'Alternatives']
+        available_asset_classes = [column for column in all_asset_classes if column in closest_row.index]
+        selected_asset_classes = list(closest_row[available_asset_classes].index)
+
+        tw = closest_row[selected_asset_classes]
+        tw = tw.apply(pd.to_numeric, errors='coerce')
+        tw.name = 'MaxDiv'
+
+        ########################################################################
+
+        target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
+        target.temp["weights"] = tw.dropna()
+
+        return True
+
 class WeighCurrentCAAF(Algo):
     def __init__(
         self,
@@ -1706,43 +1807,6 @@ class WeighCurrentCAAF(Algo):
     def __call__(self, target):
         expected_returns = target.get_data('expected_returns')
         const_covar = target.get_data('const_covar')
-
-        if self.target_md == "frontier_only":
-            target_sigma = 0.07
-            efficient_frontier = target.get_data('efficient_frontier').reset_index()
-            efficient_frontier_target_date = efficient_frontier.loc[efficient_frontier.loc[:, "Date"]==target.now]
-            abs_diff = abs(efficient_frontier_target_date['sigma'] - target_sigma)
-            min_diff_index = abs_diff.idxmin()
-            closest_row = efficient_frontier.loc[min_diff_index]
-
-            filtered_rows = efficient_frontier_target_date[efficient_frontier_target_date['sigma'] < target_sigma]
-            higher_mu_rows = filtered_rows[filtered_rows['arithmetic_mu'] > closest_row['arithmetic_mu']]
-
-            if not higher_mu_rows.empty:
-                max_mu_index = higher_mu_rows['arithmetic_mu'].idxmax()
-                closest_row = efficient_frontier.loc[max_mu_index]
-
-            tp = pd.Series({
-                'arithmetic_mu': [closest_row['arithmetic_mu']],
-                'sigma': closest_row['sigma'],
-                'md': ([closest_row['naive_md']], [closest_row['adjusted_md']]),
-                'enb': closest_row['enb'],
-                'div_ratio_sqrd': closest_row['div_ratio_sqrd'],
-                'caaf_implied_epsilon': (closest_row['mv_arithmetic_mu'] - closest_row['arithmetic_mu'])/closest_row['mv_arithmetic_mu']
-            })
-            if "HY Credit" in closest_row.index:
-                tw = closest_row.loc[['Equities', 'Gov Bonds', 'HY Credit', 'Gold', 'Alternatives']]
-            else:
-                tw = closest_row.loc[['Equities', 'Gov Bonds', 'Gold', 'Alternatives']]
-
-            target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
-            target.temp["weights"] = tw.dropna()
-
-            print(target.now)
-            if target.now.date() == datetime.date(1885, 1, 31):
-                print("Break")
-
-            return True
 
         selected = target.temp["selected"]
         available_expected_returns = list(expected_returns.loc[target.now].dropna().index)
