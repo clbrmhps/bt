@@ -17,7 +17,7 @@ set_clbrm_style(caaf_colors=True)
 
 warnings.simplefilter(action='default', category=RuntimeWarning)
 
-version_number = 5
+version_number = 13
 # source_version_number = 12
 country = 'US'
 two_stage_target_md = "frontier_only"
@@ -34,6 +34,8 @@ two_stage_target_md = "frontier_only"
 # Version number 10: US Frontier Only 8% Rebalancing Trigger
 # Version number 11: US Frontier Only 9% Rebalancing Trigger
 # Version number 12: UK Base two_stage target_md "varying"
+
+# Version number 13: US Frontier
 
 ################################################################################
 # Color Definition
@@ -198,18 +200,6 @@ er.loc[:"1973-01-31", "Gold"] = np.nan
 
 #reference_properties = pd.read_csv(f"./data/portfolio_properties/Properties_CurrentCAAF_{source_version_number}.csv", index_col=0)
 #target_md = reference_properties['adjusted_md']
-try:
-    efficient_frontier_two_stage = pd.read_pickle(f"./data/efficient_frontier_two_stage_{version_number}.pkl")
-    efficient_frontier_two_stage.set_index("Date", inplace=True)
-    efficient_frontier_two_stage.sort_index(inplace=True)
-except FileNotFoundError:
-    pass
-try:
-    efficient_frontier_current_caaf = pd.read_pickle(f"./data/efficient_frontier_current_caaf_{version_number}.pkl")
-    efficient_frontier_current_caaf.set_index("Date", inplace=True)
-    efficient_frontier_current_caaf.sort_index(inplace=True)
-except FileNotFoundError:
-    pass
 
 if 'Cash' in er.columns:
     er.drop(columns=['Cash'], inplace=True)
@@ -250,7 +240,7 @@ additional_constraints = {'alternatives_upper_bound': 0.144,
                           'hy_credit_upper_bound': 0.086,}
 additional_constraints = None
 
-weighTwoStageAlgo = bt.algos.WeighTwoStage(
+weighMaxDivAlgo = bt.algos.WeighMaxDiv(
     lookback=pd.DateOffset(months=1000),
     initial_weights=None,
     risk_weights=None,
@@ -262,8 +252,6 @@ weighTwoStageAlgo = bt.algos.WeighTwoStage(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    return_factor=0.9,
-    target_md=two_stage_target_md
 )
 
 weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
@@ -278,7 +266,6 @@ weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    target_md=two_stage_target_md
 )
 
 runMonthlyAlgo = bt.algos.RunMonthly(
@@ -320,7 +307,8 @@ rebalAlgo = bt.algos.Rebalance()
 # )
 
 tolerance = 0.2
-strat_current_caaf = bt.Strategy("Current CAAF",
+strat_current_caaf = bt.Strategy(
+    'Current CAAF',
     [
         bt.algos.ExpectedReturns('expected_returns'),
         bt.algos.ConstantCovar('const_covar'),
@@ -333,19 +321,20 @@ strat_current_caaf = bt.Strategy("Current CAAF",
 )
 strat_current_caaf.perm["properties"] = pd.DataFrame()
 
-strat_two_stage = bt.Strategy(
-    'Two Stage',
+# 1973-07-31
+strat_max_div = bt.Strategy(
+    'Max Div',
     [
         bt.algos.ExpectedReturns('expected_returns'),
         bt.algos.ConstantCovar('const_covar'),
         bt.algos.RunAfterDate('1875-01-31'),
         selectTheseAlgo,
-        weighTwoStageAlgo,
+        weighMaxDivAlgo,
         # bt.algos.Or([bt.algos.RunOnce(), bt.algos.RunIfOutOfTriggerThreshold(tolerance)]),
         rebalAlgo
     ]
 )
-strat_two_stage.perm["properties"] = pd.DataFrame()
+strat_max_div.perm["properties"] = pd.DataFrame()
 
 strat_4060 = bt.Strategy(
     '40/60',
@@ -399,8 +388,6 @@ additional_data = {
     'expected_returns': er,
     'const_covar': const_covar,
 }
-if two_stage_target_md == "frontier_only":
-    additional_data['efficient_frontier'] = efficient_frontier_current_caaf
 backtest_current_caaf = bt.Backtest(
      strat_current_caaf,
      pdf,
@@ -412,12 +399,10 @@ additional_data = {
     'expected_returns': er,
     'const_covar': const_covar,
 }
-if two_stage_target_md == "frontier" or two_stage_target_md == "frontier_only":
-    additional_data['efficient_frontier'] = efficient_frontier_two_stage
-    additional_data['efficient_frontier_current_caaf'] = efficient_frontier_current_caaf
-backtest_two_stage = bt.Backtest(
-    strat_two_stage,
+backtest_max_div = bt.Backtest(
+    strat_max_div,
     pdf,
+    integer_positions=False,
     additional_data=additional_data
 )
 
@@ -440,9 +425,11 @@ backtest_erc = bt.Backtest(
 )
 
 start_time = time.time()
-res_target = bt.run(backtest_current_caaf, backtest_two_stage, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
-# res_target = bt.run(backtest_current_caaf, backtest_two_stage)
-# res_target = bt.run(backtest_current_caaf)
+# res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
+res_target = bt.run(backtest_current_caaf, backtest_max_div)
+# res_target = bt.run(backtest_max_div)
+
+res_target.get_security_weights(0)
 
 # res_target = bt.run(backtest_two_stage)
 end_time = time.time()
@@ -483,7 +470,7 @@ def plot_stacked_area(df, method=None, country=None, version_number=None):
 bt_keys = list(res_target.keys())
 
 # For plotting stacked areas based on get_security_weights
-for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40/60']:
+for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40/60', 'Max Div']:
     if method in bt_keys:
         if country == 'US':
             columns_to_plot = ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
@@ -492,33 +479,31 @@ for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40
         plot_stacked_area(res_target.get_security_weights(bt_keys.index(method)).loc[:, columns_to_plot], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
 
 # For plotting columns from res_target.backtests
-for method in ['Current CAAF', 'Two Stage']:
-    if method in res_target.backtests:
-        current_df = res_target.backtests[method].strategy.perm['properties']
-
-        plot_columns(res_target.backtests[method].strategy.perm['properties'], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
-
-        # Plotting
-        plt.figure(figsize=(10, 6))
-        plt.plot(current_df.index, current_df['caaf_implied_epsilon'])
-        plt.xlabel('Date')
-        plt.ylabel('CAAF Implied Epsilon')
-
-        # Set the formatter
-        formatter = FuncFormatter(to_percentage)
-        plt.gca().yaxis.set_major_formatter(formatter)
-
-        plt.title(f'{method} Implied Epsilon over time')
-        plt.grid(True)
-        plt.show()
-
-
+# for method in ['Current CAAF', 'Two Stage']:
+#     if method in res_target.backtests:
+#         current_df = res_target.backtests[method].strategy.perm['properties']
+#
+#         plot_columns(res_target.backtests[method].strategy.perm['properties'], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
+#
+#         # Plotting
+#         plt.figure(figsize=(10, 6))
+#         plt.plot(current_df.index, current_df['caaf_implied_epsilon'])
+#         plt.xlabel('Date')
+#         plt.ylabel('CAAF Implied Epsilon')
+#
+#         # Set the formatter
+#         formatter = FuncFormatter(to_percentage)
+#         plt.gca().yaxis.set_major_formatter(formatter)
+#
+#         plt.title(f'{method} Implied Epsilon over time')
+#         plt.grid(True)
+#         plt.show()
 
 ################################################################################
 # Price Plot
 
 # For extracting prices
-for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40'], ['prices_twostage', 'prices_currentcaaf', 'prices_4060', 'prices_6040']):
+for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40', 'Max Div'], ['prices_twostage', 'prices_currentcaaf', 'prices_4060', 'prices_6040', 'prices_maxdiv']):
     if method in res_target.prices.columns:
         exec(f"{var_name} = res_target.prices.loc[:, '{method}']")
 
@@ -526,7 +511,7 @@ for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40'], ['p
 combined_prices = pd.DataFrame()
 
 # Loop through each portfolio methodology to extract and store prices
-for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40'], ['prices_twostage', 'prices_currentcaaf', 'prices_4060', 'prices_6040']):
+for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40', 'Max Div'], ['prices_twostage', 'prices_currentcaaf', 'prices_4060', 'prices_6040', 'prices_maxdiv']):
     if method in res_target.prices.columns:
         exec(f"{var_name} = res_target.prices.loc[:, '{method}']")
         exec(f"combined_prices['{method}'] = {var_name}")

@@ -221,12 +221,17 @@ er.loc[:"1973-01-31", "Gold"] = np.nan
 const_covar = rdf.cov()
 covar = const_covar * 12
 
+config = 3
+
 # Create a directory for plots if it doesn't exist
-plots_dir = "./plots"
+plots_dir = f"./plots/config_{config}"
 os.makedirs(plots_dir, exist_ok=True)
 
+frontiers_dir = f"./frontiers/config_{config}"
+os.makedirs(frontiers_dir, exist_ok=True)
+
 # Define the start date
-start_date = pd.Timestamp('1973-08-31')
+start_date = pd.Timestamp('1875-01-31')
 dates = er.index.unique()[er.index.unique() >= start_date]
 
 target_stdevs = np.arange(0.05, 0.13, 0.0025)  # Adjust this range as needed
@@ -442,8 +447,8 @@ for current_date in dates:
     results_df = pd.DataFrame(columns=selected_assets)
     results_dr = pd.DataFrame(columns=selected_assets)
 
-    start_index = len(target_stdevs) // 3
-    # start_index = 0
+    # start_index = len(target_stdevs) // 3
+    start_index = 0
     starting_target_vol = target_stdevs[start_index]
 
     target_stdevs_above = target_stdevs[start_index:]
@@ -470,7 +475,7 @@ for current_date in dates:
                     return original_objective + penalty_term
 
                 weight_ref = maxenb_weights.to_numpy()
-                penalty_coeff = 1
+                penalty_coeff = 50
 
                 constraints = (
                     {'type': 'eq', 'fun': constraint_sum_to_one},
@@ -508,7 +513,7 @@ for current_date in dates:
                     return original_objective + penalty_term
 
                 weight_ref = maxenb_weights.to_numpy()
-                penalty_coeff = 1
+                penalty_coeff = 50
 
                 constraints = (
                     {'type': 'eq', 'fun': constraint_sum_to_one},
@@ -560,7 +565,7 @@ for current_date in dates:
                     return original_objective + penalty_term
 
                 weight_ref = maxenb_weights.to_numpy()
-                penalty_coeff = 1
+                penalty_coeff = 50
 
                 constraints = (
                     {'type': 'eq', 'fun': constraint_sum_to_one},
@@ -597,7 +602,7 @@ for current_date in dates:
                     return original_objective + penalty_term
 
                 weight_ref = maxenb_weights.to_numpy()
-                penalty_coeff = 1
+                penalty_coeff = 50
 
                 constraints = (
                     {'type': 'eq', 'fun': constraint_sum_to_one},
@@ -630,6 +635,10 @@ for current_date in dates:
     # Sort the DataFrames by 'Target Vol'
     mv_df = mv_df.sort_values(by='Target Vol')
     results_df = results_df.sort_values(by='Target Vol')  # Ensuring 'Return' is the column name for target return in results_df
+    results_dr = results_dr.sort_values(by='Target Vol')
+
+    results_df.to_pickle(os.path.join(frontiers_dir, f"enb_{current_date.strftime('%Y%m%d')}"))
+    results_dr.to_pickle(os.path.join(frontiers_dir, f"dr_{current_date.strftime('%Y%m%d')}"))
 
     # Calculate (1 - epsilon) * "Target Return"
     mv_df['Adjusted Return'] = (1 - epsilon) * mv_df['Target Return']
