@@ -11,8 +11,6 @@ import matplotlib
 
 from portfolio_construction import calculations, optimization
 
-from examples.caaf import CAAF
-
 from reporting.tools.style import set_clbrm_style
 set_clbrm_style(caaf_colors=True)
 

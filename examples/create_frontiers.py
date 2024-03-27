@@ -221,7 +221,7 @@ er.loc[:"1973-01-31", "Gold"] = np.nan
 const_covar = rdf.cov()
 covar = const_covar * 12
 
-config = 3
+config = 4
 
 # Create a directory for plots if it doesn't exist
 plots_dir = f"./plots/config_{config}"
@@ -475,7 +475,7 @@ for current_date in dates:
                     return original_objective + penalty_term
 
                 weight_ref = maxenb_weights.to_numpy()
-                penalty_coeff = 50
+                penalty_coeff = 0
 
                 constraints = (
                     {'type': 'eq', 'fun': constraint_sum_to_one},
@@ -513,7 +513,7 @@ for current_date in dates:
                     return original_objective + penalty_term
 
                 weight_ref = maxenb_weights.to_numpy()
-                penalty_coeff = 50
+                penalty_coeff = 0
 
                 constraints = (
                     {'type': 'eq', 'fun': constraint_sum_to_one},
@@ -565,7 +565,7 @@ for current_date in dates:
                     return original_objective + penalty_term
 
                 weight_ref = maxenb_weights.to_numpy()
-                penalty_coeff = 50
+                penalty_coeff = 0
 
                 constraints = (
                     {'type': 'eq', 'fun': constraint_sum_to_one},
@@ -602,7 +602,7 @@ for current_date in dates:
                     return original_objective + penalty_term
 
                 weight_ref = maxenb_weights.to_numpy()
-                penalty_coeff = 50
+                penalty_coeff = 0
 
                 constraints = (
                     {'type': 'eq', 'fun': constraint_sum_to_one},

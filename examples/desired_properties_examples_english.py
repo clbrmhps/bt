@@ -9,8 +9,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import matplotlib
 
+from portfolio_construction import calculations, optimization
 
-from clbrm.portfolio_classes import calculations, optimization
 from reporting.tools.style import set_clbrm_style
 set_clbrm_style(caaf_colors=True)
 
@@ -136,29 +136,32 @@ def to_percent(y, position):
 target_vol = 0.07
 
 # Asset 1, Asset 2, Equities, Credit, Government Bonds, Gold
-asset_names = ["Anlageklasse 1", "Anlageklasse 2", "Aktien", "High Yield", "Staatsanleihen", "Gold"]
+asset_names = ["Asset Class 1", "Asset Class 2", "Equities", "High Yield", "Government Bonds", "Gold"]
 color_mapping = {
-    "Aktien": "rgb(64, 75, 151)",
-    "Staatsanleihen": "rgb(144, 143, 74)",
-    "Anlageklasse 1": "rgb(160, 84, 66)",
-    "Anlageklasse 2": "rgb(180, 84, 66)",
+    "Equities": "rgb(64, 75, 151)",
+    "Government Bonds": "rgb(144, 143, 74)",
+    "Asset Class 1" : "rgb(160, 84, 66)",
+    "Asset Class 2": "rgb(180, 84, 66)",
     "High Yield": "rgb(154, 183, 235)",
     "Gold": "rgb(216, 169, 23)"
 }
 
 extended_arithmetic_mu = np.array([0.06, 0.061, 0.06, 0.04, 0.02, 0.02])
-extended_volatilities = np.array([0.1, 0.1, 0.15, 0.09, 0.05, 0.18])
+expected_returns = pd.Series(data=extended_arithmetic_mu,
+                             index=asset_names)
 
+extended_volatilities = np.array([0.1, 0.1, 0.15, 0.09, 0.05, 0.18])
 correlation_matrix = np.array([[ 1.  ,  0.99 ,  0.12,  0.15,  0.2 ,  0.1 ],
                                [ 0.99 ,  1.  ,  0.12,  0.15,  0.2 ,  0.1 ],
                                [ 0.12,  0.12,  1.  ,  0.52 ,  0.02, 0.04],
                                [ 0.15,  0.15,  0.52,  1.  ,  0.22,  0.00],
                                [ 0.2 ,  0.2 ,  0.02 , 0.22 ,  1.  , 0.02],
                                [ 0.1 ,  0.1 ,  0.04 , 0.00 ,  0.02 ,  1.  ]])
-
 volatility_outer_product = np.outer(extended_volatilities, extended_volatilities)
 extended_sigma = correlation_matrix * volatility_outer_product
-
+covariance_matrix = pd.DataFrame(data=extended_sigma,
+                                 columns=asset_names,
+                                 index=asset_names)
 
 # Updating the number of assets and bounds
 extended_n = len(extended_arithmetic_mu)
@@ -241,42 +244,43 @@ portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_m
 color_mapping_hex = {asset: '#' + ''.join(f'{int(c):02x}' for c in color.strip('rgb()').split(', ')) for asset, color in color_mapping.items()}
 
 # Prepare DataFrame for seaborn plot
-df = pd.DataFrame({'Anlageklasse': maxenb_weights.index, 'Gewicht': maxenb_weights.values})
+df = pd.DataFrame({'Asset Class': maxenb_weights.index, 'Weight': maxenb_weights.values})
 
 matplotlib.rcParams.update({'font.size': 14})  # Adjust this value as needed
 # Plot
 plt.figure(figsize=(10, 6))
-sns.barplot(x='Anlageklasse', y='Gewicht', data=df, palette=color_mapping_hex)
+sns.barplot(x='Asset Class', y='Weight', data=df, palette=color_mapping_hex)
 plt.title('Maximum ENB Portfolio')
-plt.ylabel('Gewicht', fontsize=14)
-plt.xlabel('Anlageklasse', fontsize=14)
+plt.ylabel('Weight', fontsize=14)
+plt.xlabel('Asset Class', fontsize=14)
 plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
+plt.ylim(0, 0.55)
 plt.show()
 
 # Prepare DataFrame for seaborn plot
-df = pd.DataFrame({'Anlageklasse': mv_weights.index, 'Gewicht': mv_weights.values})
+df = pd.DataFrame({'Asset Class': mv_weights.index, 'Weight': mv_weights.values})
 
 matplotlib.rcParams.update({'font.size': 14})  # Adjust this value as needed
 # Plot
 plt.figure(figsize=(10, 6))
-sns.barplot(x='Anlageklasse', y='Gewicht', data=df, palette=color_mapping_hex)
+sns.barplot(x='Asset Class', y='Weight', data=df, palette=color_mapping_hex)
 plt.title('Mean-Variance Portfolio')
-plt.ylabel('Gewicht', fontsize=14)
-plt.xlabel('Anlageklasse', fontsize=14)
+plt.ylabel('Weight', fontsize=14)
+plt.xlabel('Asset Class', fontsize=14)
 plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
+plt.ylim(0, 0.55)
 plt.show()
 
-
-
 erc_weights = optimization.get_erc_weights(extended_sigma)
-df = pd.DataFrame({'Anlageklasse': asset_names, 'Gewicht': erc_weights})
+df = pd.DataFrame({'Asset Class': asset_names, 'Weight': erc_weights})
 
 plt.figure(figsize=(10, 6))
-sns.barplot(x='Anlageklasse', y='Gewicht', data=df, palette=color_mapping_hex)
+sns.barplot(x='Asset Class', y='Weight', data=df, palette=color_mapping_hex)
 plt.title('ERC Portfolio')
-plt.ylabel('Gewicht', fontsize=14)
-plt.xlabel('Anlageklasse', fontsize=14)
+plt.ylabel('Weight', fontsize=14)
+plt.xlabel('Asset Class', fontsize=14)
 plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
+plt.ylim(0, 0.55)
 plt.show()
 
 
@@ -291,37 +295,15 @@ optimal_moments = calculations.pf_moments(weight=caam_weights, mu=extended_arith
 
 portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_mu, extended_sigma)
 
-df = pd.DataFrame({'Anlageklasse': asset_names, 'Gewicht': caam_weights})
+df = pd.DataFrame({'Asset Class': asset_names, 'Weight': caam_weights})
 
 plt.figure(figsize=(10, 6))
-sns.barplot(x='Anlageklasse', y='Gewicht', data=df, palette=color_mapping_hex)
+sns.barplot(x='Asset Class', y='Weight', data=df, palette=color_mapping_hex)
 plt.title('CAAF 1.0 Portfolio')
-plt.ylabel('Gewicht', fontsize=14)
-plt.xlabel('Anlageklasse', fontsize=14)
+plt.ylabel('Weight', fontsize=14)
+plt.xlabel('Asset Class', fontsize=14)
 plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
-plt.show()
-
-
-
-data = {
-    'Maximum ENB': maxenb_weights.values,  # Assuming maxenb_weights is a pd.Series from your code
-    'MV': mv_weights,  # Assuming mv_weights is a pd.Series from your code
-    'ERC': erc_weights,  # Assuming erc_weights is an array from your code
-    'CAAF 1.0': caam_weights,  # Assuming caam_weights is an array from your code
-}
-
-# Assuming asset_names is a list of "Anlageklassen" that matches the order in your weights
-df_combined = pd.DataFrame(data, index=asset_names)
-
-# Plotting the combined chart
-ax = df_combined.plot(kind='bar', figsize=(10, 6), width=0.8)
-plt.title('Portfolio Gewichte nach Anlageklasse')
-plt.ylabel('Gewicht')
-plt.xlabel('Anlageklasse')
-plt.xticks(rotation=45)  # Rotate labels to improve readability
-ax.yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))  # Assuming to_percent is defined as before
-plt.legend(title='Portfoliokonstruktion')
-plt.tight_layout()  # Adjust layout to not cut off labels
+plt.ylim(0, 0.55)
 plt.show()
 
 
@@ -332,11 +314,11 @@ plt.show()
 target_vol = 0.07
 
 # Asset 1, Asset 2, Equities, Credit, Government Bonds, Gold
-asset_names = ["Anlageklasse 1", "Aktien", "High Yield", "Staatsanleihen", "Gold"]
+asset_names = ["Asset Class 1", "Equities", "High Yield", "Government Bonds", "Gold"]
 color_mapping = {
-    "Aktien": "rgb(64, 75, 151)",
-    "Staatsanleihen": "rgb(144, 143, 74)",
-    "Anlageklasse 1": "rgb(160, 84, 66)",
+    "Equities": "rgb(64, 75, 151)",
+    "Government Bonds": "rgb(144, 143, 74)",
+    "Asset Class 1": "rgb(160, 84, 66)",
     "High Yield": "rgb(154, 183, 235)",
     "Gold": "rgb(216, 169, 23)"
 }
@@ -435,16 +417,17 @@ portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_m
 color_mapping_hex = {asset: '#' + ''.join(f'{int(c):02x}' for c in color.strip('rgb()').split(', ')) for asset, color in color_mapping.items()}
 
 # Prepare DataFrame for seaborn plot
-df = pd.DataFrame({'Anlageklasse': maxenb_weights.index, 'Gewicht': maxenb_weights.values})
+df = pd.DataFrame({'Asset Class': maxenb_weights.index, 'Weight': maxenb_weights.values})
 
 matplotlib.rcParams.update({'font.size': 14})  # Adjust this value as needed
 # Plot
 plt.figure(figsize=(10, 6))
-sns.barplot(x='Anlageklasse', y='Gewicht', data=df, palette=color_mapping_hex)
+sns.barplot(x='Asset Class', y='Weight', data=df, palette=color_mapping_hex)
 plt.title('Maximum ENB Portfolio')
-plt.ylabel('Gewicht', fontsize=14)
-plt.xlabel('Anlageklasse', fontsize=14)
+plt.ylabel('Weight', fontsize=14)
+plt.xlabel('Asset Class', fontsize=14)
 plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
+plt.ylim(0, 0.55)
 plt.show()
 
 erc_weights = optimization.get_erc_weights(extended_sigma)
@@ -454,28 +437,30 @@ mv_frontier = optimization.get_mv_frontier(mu=extended_arithmetic_mu, cov=extend
 mv_weights = mv_frontier['Optimal Portfolio Weights']
 
 # Prepare DataFrame for seaborn plot
-df = pd.DataFrame({'Anlageklasse': asset_names, 'Gewicht': mv_weights})
+df = pd.DataFrame({'Asset Class': asset_names, 'Weight': mv_weights})
 
 matplotlib.rcParams.update({'font.size': 14})  # Adjust this value as needed
 # Plot
 plt.figure(figsize=(10, 6))
-sns.barplot(x='Anlageklasse', y='Gewicht', data=df, palette=color_mapping_hex)
+sns.barplot(x='Asset Class', y='Weight', data=df, palette=color_mapping_hex)
 plt.title('Mean-Variance Portfolio')
-plt.ylabel('Gewicht', fontsize=14)
-plt.xlabel('Anlageklasse', fontsize=14)
+plt.ylabel('Weight', fontsize=14)
+plt.xlabel('Asset Class', fontsize=14)
 plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
+plt.ylim(0, 0.55)
 plt.show()
 
 
 erc_weights = optimization.get_erc_weights(extended_sigma)
-df = pd.DataFrame({'Anlageklasse': asset_names, 'Gewicht': erc_weights})
+df = pd.DataFrame({'Asset Class': asset_names, 'Weight': erc_weights})
 
 plt.figure(figsize=(10, 6))
-sns.barplot(x='Anlageklasse', y='Gewicht', data=df, palette=color_mapping_hex)
+sns.barplot(x='Asset Class', y='Weight', data=df, palette=color_mapping_hex)
 plt.title('ERC Portfolio')
-plt.ylabel('Gewicht', fontsize=14)
-plt.xlabel('Anlageklasse', fontsize=14)
+plt.ylabel('Weight', fontsize=14)
+plt.xlabel('Asset Class', fontsize=14)
 plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
+plt.ylim(0, 0.55)
 plt.show()
 
 
@@ -491,39 +476,17 @@ optimal_moments = calculations.pf_moments(weight=caam_weights, mu=extended_arith
 
 portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_mu, extended_sigma)
 
-df = pd.DataFrame({'Anlageklasse': asset_names, 'Gewicht': caam_weights})
+df = pd.DataFrame({'Asset Class': asset_names, 'Weight': caam_weights})
 
 plt.figure(figsize=(10, 6))
-sns.barplot(x='Anlageklasse', y='Gewicht', data=df, palette=color_mapping_hex)
+sns.barplot(x='Asset Class', y='Weight', data=df, palette=color_mapping_hex)
 plt.title('CAAF 1.0 Portfolio')
-plt.ylabel('Gewicht', fontsize=14)
-plt.xlabel('Anlageklasse', fontsize=14)
+plt.ylabel('Weight', fontsize=14)
+plt.xlabel('Asset Class', fontsize=14)
 plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
+plt.ylim(0, 0.55)
+
 plt.show()
-
-
-
-data = {
-    'Maximum ENB': maxenb_weights.values,  # Assuming maxenb_weights is a pd.Series from your code
-    'MV': mv_weights,  # Assuming mv_weights is a pd.Series from your code
-    'ERC': erc_weights,  # Assuming erc_weights is an array from your code
-    'CAAF 1.0': caam_weights,  # Assuming caam_weights is an array from your code
-}
-
-# Assuming asset_names is a list of "Anlageklassen" that matches the order in your weights
-df_combined = pd.DataFrame(data, index=asset_names)
-
-# Plotting the combined chart
-ax = df_combined.plot(kind='bar', figsize=(10, 6), width=0.8)
-plt.title('Portfolio Gewichte nach Anlageklasse')
-plt.ylabel('Gewicht')
-plt.xlabel('Anlageklasse')
-plt.xticks(rotation=45)  # Rotate labels to improve readability
-ax.yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))  # Assuming to_percent is defined as before
-plt.legend(title='Portfoliokonstruktion')
-plt.tight_layout()  # Adjust layout to not cut off labels
-plt.show()
-
 
 
 print("Break")
