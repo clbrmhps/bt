@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import matplotlib
 
-from portfolio_construction import calculations, optimization
+from portfolio_classes import calculations, optimization
 
 from examples.caaf import CAAF
 

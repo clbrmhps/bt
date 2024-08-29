@@ -10,7 +10,7 @@ import matplotlib.ticker as mticker
 import matplotlib
 
 
-from portfolio_construction import calculations, optimization
+from portfolio_classes import calculations, optimization
 from reporting.tools.style import set_clbrm_style
 set_clbrm_style(caaf_colors=True)
 

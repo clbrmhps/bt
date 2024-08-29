@@ -11,13 +11,14 @@ import warnings
 import bt
 import seaborn as sns
 from matplotlib.ticker import FuncFormatter
+import quantstats as qs
 
 from reporting.tools.style import set_clbrm_style
 set_clbrm_style(caaf_colors=True)
 
 warnings.simplefilter(action='default', category=RuntimeWarning)
 
-version_number = 13
+version_number = 14
 # source_version_number = 12
 country = 'US'
 two_stage_target_md = "frontier_only"
@@ -426,8 +427,11 @@ backtest_erc = bt.Backtest(
 
 start_time = time.time()
 # res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
-res_target = bt.run(backtest_current_caaf, backtest_max_div)
+# res_target = bt.run(backtest_current_caaf, backtest_max_div)
+# res_target = bt.run(backtest_current_caaf)
 # res_target = bt.run(backtest_max_div)
+
+res_target = bt.run(backtest_4060, backtest_6040)
 
 res_target.get_security_weights(0)
 
@@ -479,25 +483,25 @@ for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40
         plot_stacked_area(res_target.get_security_weights(bt_keys.index(method)).loc[:, columns_to_plot], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
 
 # For plotting columns from res_target.backtests
-# for method in ['Current CAAF', 'Two Stage']:
-#     if method in res_target.backtests:
-#         current_df = res_target.backtests[method].strategy.perm['properties']
-#
-#         plot_columns(res_target.backtests[method].strategy.perm['properties'], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
-#
-#         # Plotting
-#         plt.figure(figsize=(10, 6))
-#         plt.plot(current_df.index, current_df['caaf_implied_epsilon'])
-#         plt.xlabel('Date')
-#         plt.ylabel('CAAF Implied Epsilon')
-#
-#         # Set the formatter
-#         formatter = FuncFormatter(to_percentage)
-#         plt.gca().yaxis.set_major_formatter(formatter)
-#
-#         plt.title(f'{method} Implied Epsilon over time')
-#         plt.grid(True)
-#         plt.show()
+for method in ['Current CAAF', 'Max Div']:
+    if method in res_target.backtests:
+        current_df = res_target.backtests[method].strategy.perm['properties']
+
+        plot_columns(res_target.backtests[method].strategy.perm['properties'], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
+
+        # Plotting
+        plt.figure(figsize=(10, 6))
+        plt.plot(current_df.index, current_df['caaf_implied_epsilon'])
+        plt.xlabel('Date')
+        plt.ylabel('CAAF Implied Epsilon')
+
+        # Set the formatter
+        formatter = FuncFormatter(to_percentage)
+        plt.gca().yaxis.set_major_formatter(formatter)
+
+        plt.title(f'{method} Implied Epsilon over time')
+        plt.grid(True)
+        plt.show()
 
 ################################################################################
 # Price Plot
@@ -535,6 +539,12 @@ if 'Current CAAF' in bt_keys and '40/60' in bt_keys:
 
 if 'Two Stage' in bt_keys and '40/60' in bt_keys:
     calculate_tracking_error(prices_twostage.pct_change(), prices_4060.pct_change())
+
+if 'Current CAAF' in bt_keys:
+    qs.reports.html(prices_currentcaaf.pct_change(), "Current CAAF", periods_per_year=12, output="Current_CAAF.html")
+
+if 'Max Div' in bt_keys:
+    qs.reports.html(prices_maxdiv.pct_change(), "Max Div", periods_per_year=12, output="Maximum_Diversification.html")
 
 # Calculate and plot rolling tracking error if both methods in the pair are in bt_keys
 if 'Current CAAF' in bt_keys and '40/60' in bt_keys:

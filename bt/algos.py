@@ -62,7 +62,7 @@ def pf_moments(weight, mu, is_geo, cov):
             'naive_md': naive_md,
             'adjusted_md': adjusted_md}
 
-def add_row_to_target_perm(tp, target_now, target_perm, properties=['arithmetic_mu', 'sigma', 'naive_md', 'adjusted_md', 'enb', 'div_ratio_sqrd']):
+def add_row_to_target_perm(tp, target_now, target_perm, properties=['arithmetic_mu', 'sigma', 'naive_md', 'adjusted_md', 'enb', 'div_ratio_sqrd', 'caaf_implied_epsilon']):
     new_row_data = {}
 
     for prop in properties:
@@ -1737,7 +1737,7 @@ class WeighMaxDiv(Algo):
         ########################################################################
         # Test
 
-        config = 2
+        config = 5
         self.target_vol = 0.07
 
         year = target.now.year
@@ -1746,7 +1746,7 @@ class WeighMaxDiv(Algo):
 
         # Format into 'YYYYMMDD'
         formatted_date = f"{year}{month:02d}{day:02d}"
-        model_data = pd.read_pickle(f"./data/frontiers/config_{config}/enb_{formatted_date}")
+        model_data = pd.read_pickle(f"./frontiers/config_{config}/enb_{formatted_date}")
 
         closest_index = (model_data['Sigma'] - self.target_vol).abs().idxmin()
         closest_row = model_data.loc[closest_index]
@@ -1843,6 +1843,7 @@ class WeighCurrentCAAF(Algo):
         if self.mode == "short_term":
             prc = filter_columns_based_return_availability(prc)
 
+
         tw, tp = bt.ffn.calc_current_caaf_weights(
             returns=prc.to_returns().dropna(),
             exp_rets=expected_returns.loc[target.now],
@@ -1852,7 +1853,7 @@ class WeighCurrentCAAF(Algo):
             additional_constraints=self.additional_constraints,
             covar_method=self.covar_method,
             const_covar=const_covar,
-            mode="optima"
+            mode="frontier"
         )
 
         target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])

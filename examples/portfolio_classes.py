@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 
-from examples.base_portfolio import BasePortfolio
 from portfolio_construction import calculations, optimization
 from scipy.optimize import minimize
 from analysis.drawdowns import endpoint_mdd_lookup
@@ -35,6 +34,13 @@ def calculate_weight_distance(weight, weight_ref, norm, delta=0.5):
 def scalar_effective_bets_wrapper(x, Sigma, t_MT):
     _, scalar_matrix = EffectiveBets(x, Sigma, t_MT)
     return -scalar_matrix.item()
+
+class BasePortfolio():
+    def __init__(self, tickers=None, bounds=None, constraints=None):
+        self.n_assets = len(tickers)
+        self.tickers = tickers
+        self.bounds = bounds
+        self.constraints = constraints
 
 class CAAF(BasePortfolio):
     def __init__(self, expected_returns, covariance_matrix, constraints=None,
