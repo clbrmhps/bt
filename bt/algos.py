@@ -17,7 +17,7 @@ import datetime
 import bt
 from bt.core import Algo, AlgoStack, SecurityBase, is_zero
 
-from analysis.drawdowns import endpoint_mdd_lookup
+# from analysis.drawdowns import endpoint_mdd_lookup
 
 def pf_mu(weight, mu):
     # if weight.shape != mu.shape:
@@ -54,13 +54,13 @@ def pf_moments(weight, mu, is_geo, cov):
         pf_mu_[i] = pf_mu(weight=weight[i, :], mu=mu.ravel())
         pf_sigma_[i] = pf_sigma(weight=weight[i, :], cov=cov)
     pf_geo_mu = pf_mu_ - np.square(pf_sigma_) / 2
-    naive_md, adjusted_md = endpoint_mdd_lookup(geo_mu=pf_geo_mu, sigma=pf_sigma_, frequency='M',
-                                                          percentile=5)
+#    naive_md, adjusted_md = endpoint_mdd_lookup(geo_mu=pf_geo_mu, sigma=pf_sigma_, frequency='M',
+#                                                          percentile=5)
     return {'arithmetic_mu': pf_mu_,
             'geometric_mu': pf_geo_mu,
-            'sigma': pf_sigma_,
-            'naive_md': naive_md,
-            'adjusted_md': adjusted_md}
+            'sigma': pf_sigma_}
+#            'naive_md': naive_md,
+#            'adjusted_md': adjusted_md}
 
 def add_row_to_target_perm(tp, target_now, target_perm, properties=['arithmetic_mu', 'sigma', 'naive_md', 'adjusted_md', 'enb', 'div_ratio_sqrd', 'caaf_implied_epsilon']):
     new_row_data = {}
