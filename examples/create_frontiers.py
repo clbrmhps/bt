@@ -40,6 +40,8 @@ from scipy.optimize import minimize
 from meucci.torsion import torsion
 from ffn.core import calc_erc_weights
 
+from typing import List, Dict, Tuple
+
 target_stdevs = np.arange(0.05, 0.13, 0.0025)
 target_volatility = 0.07
 epsilon = 0.1
@@ -195,10 +197,8 @@ def weight_objective(weight, weight_ref, norm, delta=0.5):
         linear_loss = delta * (abs_diff - 0.5 * delta)
         return np.sum(np.where(is_small_error, squared_loss, linear_loss))
 
-
 def constraint_sum_to_one(x):
     return np.sum(x) - 1
-
 
 def volatility_constraint(weights, covar, target_volatility):
     port_vol = np.sqrt(np.dot(np.dot(weights, covar), weights))
@@ -223,14 +223,12 @@ def EffectiveBets_sc(x, Sigma, t_MT, laglambda, arithmetic_mu):
     _, scalar_matrix = EffectiveBets(x, Sigma, t_MT)
     return -scalar_matrix.item() - laglambda * np.matmul(np.transpose(x), arithmetic_mu)
 
-# Define a function to format percentages
 def fmt(s):
     try:
         return "{:.1%}".format(float(s))
     except ValueError:
         return ""
 
-# Plotting function for stacked bar chart and efficient frontier
 def plot_charts(df, label, frontier_color, plot_filename_suffix, include_enb=False, include_dr=False,
                 selected_assets=None, selected_date=None, mv_df=None):
     plt.figure(figsize=(10, 6))
@@ -269,43 +267,10 @@ def plot_charts(df, label, frontier_color, plot_filename_suffix, include_enb=Fal
     plt.savefig(plot_filename)
     plt.clf()
 
-def process_date(current_date, er, covar, rdf, frontiers_dir, plots_dir):
+def get_selected_assets(er: pd.DataFrame, current_date: pd.Timestamp) -> List[str]:
+    return list(er.loc[current_date].dropna().index)
 
-    print(f"Processing date: {current_date}")
-    formatted_date = current_date.strftime('%Y%m%d')
-
-    print(current_date)
-
-    selected_date = current_date
-    selected_assets = list(er.loc[selected_date].dropna().index)
-
-    selected_covar = covar.loc[selected_assets, selected_assets]
-    selected_er = er.loc[selected_date, selected_assets]
-    stds = np.sqrt(np.diag(selected_covar))
-    arithmetic_mu = selected_er + np.square(stds) / 2
-
-    t_mt = torsion(selected_covar, 'minimum-torsion', method='exact')
-    x0 = np.full((len(selected_assets),), 1/len(selected_assets))
-
-    erc_weights = calc_erc_weights(returns=rdf,
-                                   initial_weights=None,
-                                   risk_weights=None,
-                                   covar_method="constant",
-                                   risk_parity_method="slsqp",
-                                   maximum_iterations=1000,
-                                   tolerance=1e-10,
-                                   const_covar=covar.loc[selected_assets, selected_assets])
-
-    stds = np.sqrt(np.diag(selected_covar))
-    arithmetic_mu = selected_er + np.square(stds) / 2
-
-    constraints = ({'type': 'eq', 'fun': constraint_sum_to_one},
-                   {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_volatility)})
-    bounds = [(0, 1) for _ in range(len(selected_assets))]  # Assuming x is already defined
-
-    ################################################################################################
-    # Mean Variance Optimization
-
+def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets):
     w = cp.Variable(len(arithmetic_mu))
 
     objective = cp.Minimize(cp.quad_form(w, selected_covar))
@@ -356,100 +321,9 @@ def process_date(current_date, er, covar, rdf, frontiers_dir, plots_dir):
             }, index=[0])
             mv_df = pd.concat([mv_df, new_row], ignore_index=True)
 
-    min_vals = np.zeros(len(selected_assets))
-    max_vals = np.ones(len(selected_assets))
+    return mv_df
 
-    ################################################################################
-    # Mean Variance Optimization Scipy
-
-    # mv_df = pd.DataFrame()
-
-    # for target_vol in target_stdevs:
-    #     constraints = (
-    #         {'type': 'eq', 'fun': constraint_sum_to_one},
-    #         {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_vol)}
-    #     )
-
-    #     result = minimize(
-    #         lambda w: -pf_mu(w, arithmetic_mu),  # We minimize the negative return to maximize the return
-    #         x0,
-    #         method='SLSQP',
-    #         bounds=bounds,
-    #         constraints=constraints,
-    #         options={'maxiter': 10_000, 'ftol': 1e-15}
-    #     )
-
-    #     target_return = -result.fun
-    #     mv_df = mv_df.append({'Target Vol': target_vol, 'Target Return': target_return,
-    #                         'Portfolio Variance': target_vol**2, 'Portfolio Std Dev': target_vol,
-    #                       **dict(zip(selected_assets, result.x))}, ignore_index=True)
-
-    # import pandas as pd
-    # import numpy as np
-    # from scipy.optimize import minimize
-
-
-    # def portfolio_variance(w, cov_matrix):
-    #     return w.T @ cov_matrix @ w
-
-
-    # def constraint_sum_to_one(w):
-    #     return np.sum(w) - 1
-
-    # def target_return_constraint(w, expected_returns, target_return):
-    #     return np.dot(w, expected_returns) - target_return
-
-
-    # mv_df = pd.DataFrame()
-    # x0 = np.array([1 / len(arithmetic_mu)] * len(arithmetic_mu))  # Initial guess
-    # bounds = [(0, 1) for _ in range(len(arithmetic_mu))]  # Non-negative weights
-
-    # for target_return in target_returns:
-    #     constraints = (
-    #         {'type': 'eq', 'fun': constraint_sum_to_one},
-    #         {'type': 'eq', 'fun': lambda w: target_return_constraint(w, arithmetic_mu, target_return)}
-    #     )
-
-    #     result = minimize(
-    #         lambda w: portfolio_variance(w, selected_covar),
-    #         x0,
-    #         method='SLSQP',
-    #         bounds=bounds,
-    #         constraints=constraints,
-    #         options={'maxiter': 10000, 'ftol': 1e-15}
-    #     )
-
-    #     if result.success:
-    #         portfolio_variance_var = result.fun
-    #         portfolio_std_dev = np.sqrt(portfolio_variance_var)
-    #         new_row = {'Target Return': target_return, 'Portfolio Variance': portfolio_variance_var,
-    #                    'Portfolio Std Dev': portfolio_std_dev, **dict(zip(selected_assets, result.x))}
-    #         mv_df = mv_df.append(new_row, ignore_index=True)
-
-
-    ################################################################################################
-    # Weight Grid
-
-    include_enb = False
-    include_dr = False
-
-    # generated_weights = generate_weights(minimum=min_vals, maximum=max_vals, increment=0.05, target=1)
-    # weights_df = pd.DataFrame(generated_weights, columns=selected_assets)
-    # portfolio_properties_df = pd.DataFrame()
-
-    # for index, row in tqdm(weights_df.iterrows(), total=len(weights_df)):
-    #     portfolio_properties = calculate_portfolio_properties(row, arithmetic_mu, selected_covar)
-    #     portfolio_properties_df = pd.concat([portfolio_properties_df, pd.DataFrame([portfolio_properties])], ignore_index=True)
-
-    # # Optional: Concatenate the weights and properties DataFrames
-    # combined_df = pd.concat([weights_df, portfolio_properties_df], axis=1)
-
-    # include_enb = True
-    # include_dr = True
-
-    ################################################################################################
-    # Max ENB/DR
-
+def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds):
     n = len(arithmetic_mu)
 
     maxenb_weights = pd.Series(x0)
@@ -478,10 +352,7 @@ def process_date(current_date, er, covar, rdf, frontiers_dir, plots_dir):
                                       **dict(zip(selected_assets, closest_row[selected_assets]))}, index=[0])
                 mv_df = pd.concat([mv_df, new_row], ignore_index=True)
 
-                ################################################################################################
-                # Maximum ENB Portfolio
                 def enb_soft_constraint_objective(w, *args):
-                    # sigma, t_MT, weight_ref, norm, penalty_coeff = args
                     sigma, t_MT, weight_ref, norm, penalty_coeff = args
                     original_objective = EffectiveBets_scalar(w, sigma, t_MT)
                     penalty_term = penalty_coeff * weight_objective(w, weight_ref, norm)
@@ -510,50 +381,9 @@ def process_date(current_date, er, covar, rdf, frontiers_dir, plots_dir):
                     aligned_weights, aligned_mu = maxenb_weights.align(arithmetic_mu, join='inner')
                     portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_mu, selected_covar)
 
-                    # Add the optimized weights to the DataFrame
                     new_row = pd.DataFrame({'ENB': -result.fun ,'Target Vol': target_vol, 'Return': portfolio_properties['arithmetic_mu'][0], 'Sigma': portfolio_properties['sigma'],
                                           **dict(zip(selected_assets, result.x))}, index=[0])
                     results_df = pd.concat([results_df, new_row], ignore_index=True)
-
-                ################################################################################################
-                # Maximum DR Portfolio
-
-                # def dr_soft_constraint_objective(w, *args):
-                #     sigma, standard_deviations, weight_ref, norm, penalty_coeff = args
-                #     original_objective = -diversification_ratio(w, sigma, standard_deviations)  # Adjust as necessary
-                #     penalty_term = penalty_coeff * weight_objective(w, weight_ref, norm)
-                #     return original_objective + penalty_term
-
-                # weight_ref = maxenb_weights.to_numpy()
-
-                # constraints = (
-                #     {'type': 'eq', 'fun': constraint_sum_to_one},
-                #     {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_vol)},
-                #     {'type': 'ineq', 'fun': lambda w: return_objective(w, arithmetic_mu) - (1 - epsilon) * target_return}
-                # )
-
-                # variances = np.diag(selected_covar)
-                # standard_deviations = np.sqrt(variances)
-
-                # result = minimize(
-                #     dr_soft_constraint_objective,
-                #     x0,
-                #     args=(selected_covar.to_numpy(), standard_deviations, weight_ref, "huber", penalty_coeff),
-                #     method='SLSQP',
-                #     bounds=bounds,
-                #     constraints=constraints,
-                #     options={'maxiter': 1000, 'ftol': 1e-10}
-                # )
-
-                # if result.success:
-                #     maxdr_weights = pd.Series({arithmetic_mu.index[i]: result.x[i] for i in range(n)})
-                #     aligned_weights, aligned_mu = maxdr_weights.align(arithmetic_mu, join='inner')
-                #     portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_mu, selected_covar)
-
-                #     # Add the optimized weights to the DataFrame
-                #     new_row = pd.DataFrame({'ENB': -result.fun ,'Target Vol': target_vol, 'Return': portfolio_properties['arithmetic_mu'][0], 'Sigma': portfolio_properties['sigma'],
-                #                           **dict(zip(selected_assets, result.x))}, index=[0])
-                #     results_dr = pd.concat([results_dr, new_row], ignore_index=True)
 
     if len(target_stdevs_below) > 0:
         for target_vol in target_stdevs_below:
@@ -597,68 +427,61 @@ def process_date(current_date, er, covar, rdf, frontiers_dir, plots_dir):
                 aligned_weights, aligned_mu = maxenb_weights.align(arithmetic_mu, join='inner')
                 portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_mu, selected_covar)
 
-                # Add the optimized weights to the DataFrame
                 new_row = pd.DataFrame({'ENB': -result.fun ,'Target Vol': target_vol, 'Return': portfolio_properties['arithmetic_mu'][0], 'Sigma': portfolio_properties['sigma'],
                                       **dict(zip(selected_assets, result.x))}, index=[0])
                 results_df = pd.concat([results_df, new_row], ignore_index=True)
 
-                ################################################################################################
-                # Maximum DR Portfolio
+    return results_df
 
-                # def dr_soft_constraint_objective(w, *args):
-                #     sigma, standard_deviations, weight_ref, norm, penalty_coeff = args
-                #     original_objective = -diversification_ratio(w, sigma, standard_deviations)  # Adjust as necessary
-                #     penalty_term = penalty_coeff * weight_objective(w, weight_ref, norm)
-                #     return original_objective + penalty_term
 
-                # weight_ref = maxenb_weights.to_numpy()
-
-                # constraints = (
-                #     {'type': 'eq', 'fun': constraint_sum_to_one},
-                #     {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_vol)},
-                #     {'type': 'ineq', 'fun': lambda w: return_objective(w, arithmetic_mu) - (1 - epsilon) * target_return}
-                # )
-
-                # variances = np.diag(selected_covar)
-                # standard_deviations = np.sqrt(variances)
-
-                # result = minimize(
-                #     dr_soft_constraint_objective,
-                #     x0,
-                #     args=(selected_covar.to_numpy(), standard_deviations, weight_ref, "huber", penalty_coeff),
-                #     method='SLSQP',
-                #     bounds=bounds,
-                #     constraints=constraints,
-                #     options={'maxiter': 1000, 'ftol': 1e-10}
-                # )
-
-                # maxdr_weights = pd.Series({arithmetic_mu.index[i]: result.x[i] for i in range(n)})
-                # aligned_weights, aligned_mu = maxdr_weights.align(arithmetic_mu, join='inner')
-                # portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_mu, selected_covar)
-
-                # # Add the optimized weights to the DataFrame
-                # new_row = pd.DataFrame({'ENB': -result.fun ,'Target Vol': target_vol, 'Return': portfolio_properties['arithmetic_mu'][0], 'Sigma': portfolio_properties['sigma'],
-                #                       **dict(zip(selected_assets, result.x))}, index=[0])
-                # results_dr = pd.concat([results_dr, new_row], ignore_index=True)
-
-    # Sort the DataFrames by 'Target Vol'
+def save_and_plot_results(results_df: pd.DataFrame, mv_df: pd.DataFrame, current_date: pd.Timestamp,
+                          frontiers_dir: str, plots_dir: str, selected_assets: List[str]):
     mv_df = mv_df.sort_values(by='Target Vol')
-    results_df = results_df.sort_values(by='Target Vol')  # Ensuring 'Return' is the column name for target return in results_df
-    # results_dr = results_dr.sort_values(by='Target Vol')
+    results_df = results_df.sort_values(by='Target Vol')
 
     results_df.to_pickle(os.path.join(frontiers_dir, f"enb_{current_date.strftime('%Y%m%d')}"))
-    # results_dr.to_pickle(os.path.join(frontiers_dir, f"dr_{current_date.strftime('%Y%m%d')}"))
 
-    # Calculate (1 - epsilon) * "Target Return"
     mv_df['Adjusted Return'] = (1 - epsilon) * mv_df['Target Return']
 
-    plot_charts(results_df, 'Max ENB Frontier', 'blue', f'enb_{current_date.date().strftime("%Y%m%d")}', include_enb=include_enb,
-                selected_assets=selected_assets, selected_date=selected_date, mv_df=mv_df, combined_df=results_df)
+    plot_charts(results_df, 'Max ENB Frontier', 'blue', f'enb_{current_date.date().strftime("%Y%m%d")}',
+                include_enb=True, selected_assets=selected_assets, selected_date=current_date, mv_df=mv_df,
+                combined_df=results_df)
 
-    # Plot for results_dr (assuming 'results_dr' is another DataFrame similar to 'results_df')
-    # plot_charts(results_dr, 'Max DR Frontier', 'green', f'dr_{current_date.date().strftime("%Y%m%d")}', include_dr=include_dr)
+def process_date(selected_date: pd.Timestamp, er: pd.DataFrame, covar: pd.DataFrame, rdf: pd.DataFrame,
+                 frontiers_dir: str, plots_dir: str) -> Dict:
+    print(f"Processing date: {selected_date}")
 
-    return {"date": current_date, "data": "some results"}
+    # Metrics and necessary data
+
+    selected_assets = get_selected_assets(er, selected_date)
+    selected_covar = covar.loc[selected_assets, selected_assets]
+    selected_er = er.loc[selected_date, selected_assets]
+
+    stds = np.sqrt(np.diag(selected_covar))
+    arithmetic_mu = selected_er + np.square(stds) / 2
+
+    t_mt = torsion(selected_covar, 'minimum-torsion', method='exact')
+    x0 = np.full((len(selected_assets),), 1/len(selected_assets))
+
+    erc_weights = calc_erc_weights(returns=rdf,
+                                   initial_weights=None,
+                                   risk_weights=None,
+                                   covar_method="constant",
+                                   risk_parity_method="slsqp",
+                                   maximum_iterations=1000,
+                                   tolerance=1e-10,
+                                   const_covar=selected_covar)
+
+    constraints = ({'type': 'eq', 'fun': constraint_sum_to_one},
+                   {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_volatility)})
+    bounds = [(0, 1) for _ in range(len(selected_assets))]
+
+    mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets)
+    results_df = calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds)
+
+    save_and_plot_results(results_df, mv_df, selected_date, frontiers_dir, plots_dir, selected_assets)
+
+    return {"date": selected_date, "data": "Results processed successfully"}
 
 
 if __name__ == "__main__":
@@ -671,4 +494,3 @@ if __name__ == "__main__":
         results = list(executor.map(process_date, dates, [er] * len(dates), [covar] * len(dates), [rdf] * len(dates), [frontiers_dir] * len(dates), [plots_dir] * len(dates)))
 
     print(results)
-
