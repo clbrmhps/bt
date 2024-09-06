@@ -44,14 +44,14 @@ from typing import List, Dict, Tuple
 
 target_stdevs = np.arange(0.05, 0.13, 0.0025)
 target_volatility = 0.07
-epsilon = 0.1
+epsilon = 0.01
 
 warnings.simplefilter(action='default', category=RuntimeWarning)
 
 set_clbrm_style(caaf_colors=True)
 
-version_number = 5
-country = "US"
+config = 5
+country = "UK"
 
 rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
 rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
@@ -65,8 +65,6 @@ er.loc[:"1973-01-31", "Gold"] = np.nan
 
 const_covar = rdf.cov()
 covar = const_covar * 12
-
-config = 8
 
 plots_dir = f"./plots/config_{config}"
 os.makedirs(plots_dir, exist_ok=True)
@@ -230,7 +228,7 @@ def fmt(s):
         return ""
 
 def plot_charts(df, label, frontier_color, plot_filename_suffix, include_enb=False, include_dr=False,
-                selected_assets=None, selected_date=None, mv_df=None):
+                selected_assets=None, selected_date=None, mv_df=None, plots_dir=None):
     plt.figure(figsize=(10, 6))
     ax = df.loc[:, selected_assets].plot(kind='bar', stacked=True, color=HEX_COLORS)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: '{:.0%}'.format(y)))
@@ -314,6 +312,7 @@ def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_a
             portfolio_std_dev = math.sqrt(portfolio_variance)
 
             new_row = pd.DataFrame({
+                'Target Vol': portfolio_std_dev,
                 'Target Return': target_return,
                 'Portfolio Variance': portfolio_variance,
                 'Portfolio Std Dev': portfolio_std_dev,
@@ -339,7 +338,7 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
     target_stdevs_above = target_stdevs[start_index:]
     target_stdevs_below = target_stdevs[:start_index][::-1]
 
-    penalty_coeff = 40
+    penalty_coeff = 1
 
     if len(target_stdevs_above) > 0:
         for target_vol in target_stdevs_above:
@@ -437,21 +436,20 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
 def save_and_plot_results(results_df: pd.DataFrame, mv_df: pd.DataFrame, current_date: pd.Timestamp,
                           frontiers_dir: str, plots_dir: str, selected_assets: List[str]):
     mv_df = mv_df.sort_values(by='Target Vol')
-    results_df = results_df.sort_values(by='Target Vol')
-
-    results_df.to_pickle(os.path.join(frontiers_dir, f"enb_{current_date.strftime('%Y%m%d')}"))
-
-    mv_df['Adjusted Return'] = (1 - epsilon) * mv_df['Target Return']
-
-    plot_charts(results_df, 'Max ENB Frontier', 'blue', f'enb_{current_date.date().strftime("%Y%m%d")}',
-                include_enb=True, selected_assets=selected_assets, selected_date=current_date, mv_df=mv_df,
-                combined_df=results_df)
+    try:
+        results_df = results_df.sort_values(by='Target Vol')
+    except Exception as e:
+        print(f"An error occurred while sorting results_df at date {current_date}: {e}")
+    else:
+        results_df.to_pickle(os.path.join(frontiers_dir, f"enb_{current_date.strftime('%Y%m%d')}"))
+        mv_df['Adjusted Return'] = (1 - epsilon) * mv_df['Target Return']
+        plot_charts(results_df, 'Max ENB Frontier', 'blue', f'enb_{current_date.date().strftime("%Y%m%d")}',
+                    include_enb=True, selected_assets=selected_assets, selected_date=current_date, mv_df=mv_df,
+                    plots_dir=plots_dir)
 
 def process_date(selected_date: pd.Timestamp, er: pd.DataFrame, covar: pd.DataFrame, rdf: pd.DataFrame,
                  frontiers_dir: str, plots_dir: str) -> Dict:
     print(f"Processing date: {selected_date}")
-
-    # Metrics and necessary data
 
     selected_assets = get_selected_assets(er, selected_date)
     selected_covar = covar.loc[selected_assets, selected_assets]
@@ -463,17 +461,6 @@ def process_date(selected_date: pd.Timestamp, er: pd.DataFrame, covar: pd.DataFr
     t_mt = torsion(selected_covar, 'minimum-torsion', method='exact')
     x0 = np.full((len(selected_assets),), 1/len(selected_assets))
 
-    erc_weights = calc_erc_weights(returns=rdf,
-                                   initial_weights=None,
-                                   risk_weights=None,
-                                   covar_method="constant",
-                                   risk_parity_method="slsqp",
-                                   maximum_iterations=1000,
-                                   tolerance=1e-10,
-                                   const_covar=selected_covar)
-
-    constraints = ({'type': 'eq', 'fun': constraint_sum_to_one},
-                   {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_volatility)})
     bounds = [(0, 1) for _ in range(len(selected_assets))]
 
     mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets)
@@ -488,7 +475,6 @@ if __name__ == "__main__":
     from concurrent.futures import ProcessPoolExecutor
 
     num_cores = os.cpu_count()
-    num_cores = 30
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         results = list(executor.map(process_date, dates, [er] * len(dates), [covar] * len(dates), [rdf] * len(dates), [frontiers_dir] * len(dates), [plots_dir] * len(dates)))

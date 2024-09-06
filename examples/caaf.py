@@ -20,7 +20,7 @@ warnings.simplefilter(action='default', category=RuntimeWarning)
 
 version_number = 14
 # source_version_number = 12
-country = 'US'
+country = 'UK'
 two_stage_target_md = "frontier_only"
 
 # Version number 1: US Base two_stage target_md 0.27
@@ -427,11 +427,11 @@ backtest_erc = bt.Backtest(
 
 start_time = time.time()
 # res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
-# res_target = bt.run(backtest_current_caaf, backtest_max_div)
+res_target = bt.run(backtest_current_caaf, backtest_max_div)
 # res_target = bt.run(backtest_current_caaf)
 # res_target = bt.run(backtest_max_div)
 
-res_target = bt.run(backtest_4060, backtest_6040)
+# res_target = bt.run(backtest_4060, backtest_6040)
 
 res_target.get_security_weights(0)
 
