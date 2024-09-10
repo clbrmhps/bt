@@ -1,31 +1,9 @@
 # Standard library imports
-import os
-import time
 import warnings
-
-# Third-party library imports
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import matplotlib.ticker as mtick
-from matplotlib.ticker import FuncFormatter
-import plotly.express as px
-import seaborn as sns
-import dash
-from dash import dcc, html
-from dash.dependencies import Input, Output
-from scipy.optimize import minimize
-import bt
-import ffn
-from plotly.subplots import make_subplots
-from tqdm import tqdm  # Import tqdm
 
 from reporting.tools.style import set_clbrm_style
 from meucci.EffectiveBets import EffectiveBets
-from meucci.torsion import torsion
 from analysis.drawdowns import endpoint_mdd_lookup
-from ffn.core import calc_erc_weights
 
 import numpy as np
 import cvxpy as cp
@@ -38,9 +16,8 @@ from matplotlib.ticker import FuncFormatter
 from scipy.optimize import minimize
 
 from meucci.torsion import torsion
-from ffn.core import calc_erc_weights
 
-from typing import List, Dict, Tuple
+from typing import List, Dict
 
 target_stdevs = np.arange(0.05, 0.13, 0.0025)
 target_volatility = 0.07
