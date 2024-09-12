@@ -18,14 +18,20 @@ from scipy.optimize import minimize
 from meucci.torsion import torsion
 
 from typing import List, Dict
+from ffn.core import add_additional_constraints
+
+warnings.simplefilter(action='default', category=RuntimeWarning)
+set_clbrm_style(caaf_colors=True)
 
 target_stdevs = np.arange(0.05, 0.13, 0.0025)
 target_volatility = 0.07
 epsilon = 0.01
+lambda_coeff = 1
 
-warnings.simplefilter(action='default', category=RuntimeWarning)
-
-set_clbrm_style(caaf_colors=True)
+additional_constraints = {'alternatives_upper_bound': 0.144,
+                          'em_equities_upper_bound': 0.3,
+                          'hy_credit_upper_bound': 0.086,}
+additional_constraints = None
 
 config = 5
 country = "UK"
@@ -245,7 +251,7 @@ def plot_charts(df, label, frontier_color, plot_filename_suffix, include_enb=Fal
 def get_selected_assets(er: pd.DataFrame, current_date: pd.Timestamp) -> List[str]:
     return list(er.loc[current_date].dropna().index)
 
-def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets):
+def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country):
     w = cp.Variable(len(arithmetic_mu))
 
     objective = cp.Minimize(cp.quad_form(w, selected_covar))
@@ -276,6 +282,7 @@ def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_a
         constraint_box = w >= 0
 
         constraints = [constraint_weight, constraint_return, constraint_box]
+        constraints = add_additional_constraints(constraints, additional_constraints, library='cvxpy', country=country)
 
         try:
             problem = cp.Problem(objective, constraints)
@@ -299,14 +306,12 @@ def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_a
 
     return mv_df
 
-def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds):
+def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds, country):
     n = len(arithmetic_mu)
 
     maxenb_weights = pd.Series(x0)
-    maxdr_weights = pd.Series(x0)
 
     results_df = pd.DataFrame(columns=selected_assets)
-    results_dr = pd.DataFrame(columns=selected_assets)
 
     # start_index = len(target_stdevs) // 3
     start_index = 0
@@ -315,7 +320,7 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
     target_stdevs_above = target_stdevs[start_index:]
     target_stdevs_below = target_stdevs[:start_index][::-1]
 
-    penalty_coeff = 1
+    penalty_coeff = lamba_coeff
 
     if len(target_stdevs_above) > 0:
         for target_vol in target_stdevs_above:
@@ -341,6 +346,7 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
                     {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_vol)},
                     {'type': 'ineq', 'fun': lambda w: return_objective(w, arithmetic_mu) - (1 - epsilon) * target_return}
                 )
+                constraints = add_additional_constraints(constraints, additional_constraints, library='scipy', country=country)
 
                 result = minimize(
                     enb_soft_constraint_objective,
@@ -388,6 +394,7 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
                     {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_vol)},
                     {'type': 'ineq', 'fun': lambda w: return_objective(w, arithmetic_mu) - (1 - epsilon) * target_return}
                 )
+                constraints = add_additional_constraints(constraints, additional_constraints, library='scipy', country=country)
 
                 result = minimize(
                     enb_soft_constraint_objective,
@@ -425,7 +432,7 @@ def save_and_plot_results(results_df: pd.DataFrame, mv_df: pd.DataFrame, current
                     plots_dir=plots_dir)
 
 def process_date(selected_date: pd.Timestamp, er: pd.DataFrame, covar: pd.DataFrame, rdf: pd.DataFrame,
-                 frontiers_dir: str, plots_dir: str) -> Dict:
+                 frontiers_dir: str, plots_dir: str, country: str) -> Dict:
     print(f"Processing date: {selected_date}")
 
     selected_assets = get_selected_assets(er, selected_date)
@@ -440,8 +447,8 @@ def process_date(selected_date: pd.Timestamp, er: pd.DataFrame, covar: pd.DataFr
 
     bounds = [(0, 1) for _ in range(len(selected_assets))]
 
-    mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets)
-    results_df = calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds)
+    mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country)
+    results_df = calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds, country)
 
     save_and_plot_results(results_df, mv_df, selected_date, frontiers_dir, plots_dir, selected_assets)
 
@@ -454,6 +461,6 @@ if __name__ == "__main__":
     num_cores = os.cpu_count()
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
-        results = list(executor.map(process_date, dates, [er] * len(dates), [covar] * len(dates), [rdf] * len(dates), [frontiers_dir] * len(dates), [plots_dir] * len(dates)))
+        results = list(executor.map(process_date, dates, [er] * len(dates), [covar] * len(dates), [rdf] * len(dates), [frontiers_dir] * len(dates), [plots_dir] * len(dates), [country] * len(dates)))
 
     print(results)

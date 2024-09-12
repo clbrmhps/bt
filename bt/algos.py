@@ -1346,7 +1346,6 @@ class WeighERC(Algo):
 
     Requires:
         * selected
-
     """
 
     def __init__(
@@ -1484,185 +1483,6 @@ class WeighMeanVar(Algo):
         target.temp["weights"] = tw.dropna()
         return True
 
-class WeighTwoStage(Algo):
-    def __init__(
-        self,
-        lookback=pd.DateOffset(months=3),
-        initial_weights=None,
-        risk_weights=None,
-        covar_method="ledoit-wolf",
-        risk_parity_method="ccd",
-        maximum_iterations=100,
-        tolerance=1e-8,
-        lag=pd.DateOffset(days=0),
-        bounds=(0.0, 1.0),
-        additional_constraints=None,
-        mode="short_term",
-        return_factor=0.95,
-        target_md=0.27
-    ):
-        super(WeighTwoStage, self).__init__()
-        self.erc = WeighERC(
-            lookback,
-            initial_weights,
-            risk_weights,
-            covar_method,
-            risk_parity_method,
-            maximum_iterations,
-            tolerance,
-            lag,
-        )
-        self.lookback = lookback
-        self.initial_weights = initial_weights
-        self.risk_weights = risk_weights
-        self.covar_method = covar_method
-        self.risk_parity_method = risk_parity_method
-        self.maximum_iterations = maximum_iterations
-        self.tolerance = tolerance
-        self.lag = lag
-        self.bounds = bounds
-        self.additional_constraints = additional_constraints
-        self.mode = mode
-        self.return_factor = return_factor
-        self.target_md = target_md
-
-    def __call__(self, target):
-        expected_returns = target.get_data('expected_returns')
-        const_covar = target.get_data('const_covar')
-
-        if self.target_md == "varying":
-            target_md_var = target.get_data('target_md_var')
-            target_md = target_md_var[target.now.date().strftime("%Y-%m-%d")]
-        elif self.target_md == "frontier":
-            efficient_frontier = target.get_data('efficient_frontier')
-            target_md_var = target.get_data('target_md_var')
-            target_md = target_md_var[target.now.date().strftime("%Y-%m-%d")]
-            current_efficient_frontier = efficient_frontier.loc[target.now.date().strftime("%Y-%m-%d")].reset_index()
-            current_efficient_frontier['abs_diff'] = abs(current_efficient_frontier['adjusted_md'] - target_md)
-            min_diff_row = current_efficient_frontier.iloc[current_efficient_frontier['abs_diff'].idxmin()]
-            closest_sigma = min_diff_row['sigma']
-        elif self.target_md == "frontier_only":
-                target_sigma = 0.07
-
-                # Calculate the closest sigma on the Current CAAF Efficient Frontier
-                efficient_frontier_current_caaf = target.get_data('efficient_frontier_current_caaf').reset_index()
-                efficient_frontier_current_caaf_target_date = efficient_frontier_current_caaf.loc[efficient_frontier_current_caaf.loc[:, "Date"] == target.now]
-                abs_diff_current_caaf = abs(efficient_frontier_current_caaf_target_date['sigma'] - target_sigma)
-                min_diff_index_current_caaf = abs_diff_current_caaf.idxmin()
-                closest_row_current_caaf = efficient_frontier_current_caaf.loc[min_diff_index_current_caaf]
-
-                filtered_rows_current_caaf = efficient_frontier_current_caaf_target_date[efficient_frontier_current_caaf_target_date['sigma'] < target_sigma]
-                higher_mu_rows_current_caaf = filtered_rows_current_caaf[filtered_rows_current_caaf['arithmetic_mu'] > closest_row_current_caaf['arithmetic_mu']]
-
-                if not higher_mu_rows_current_caaf.empty:
-                    max_mu_index_current_caaf = higher_mu_rows_current_caaf['arithmetic_mu'].idxmax()
-                    closest_row_current_caaf = efficient_frontier_current_caaf.loc[max_mu_index_current_caaf]
-
-                # Calculate the closest sigma on the Two Stage Efficient Frontier
-                efficient_frontier = target.get_data('efficient_frontier').reset_index()
-                efficient_frontier_target_date = efficient_frontier.loc[efficient_frontier.loc[:, "Date"] == target.now]
-                abs_diff = abs(efficient_frontier_target_date['sigma'] - target_sigma)
-                min_diff_index = abs_diff.idxmin()
-                closest_row = efficient_frontier.loc[min_diff_index]
-
-                filtered_rows = efficient_frontier_target_date[efficient_frontier_target_date['sigma'] < target_sigma]
-                higher_mu_rows = filtered_rows[filtered_rows['arithmetic_mu'] > closest_row['arithmetic_mu']]
-
-                if not higher_mu_rows.empty:
-                    max_mu_index = higher_mu_rows['arithmetic_mu'].idxmax()
-                    closest_row = efficient_frontier.loc[max_mu_index]
-
-                # Adjust to Current CAAF Efficient Frontier if the difference is greater than 0.01
-                if abs(closest_row_current_caaf['sigma'] - closest_row['sigma']) > 0.0025:
-                    abs_diff = abs(efficient_frontier_target_date['sigma'] - closest_row_current_caaf['sigma'])
-                    min_diff_index = abs_diff.idxmin()
-                    closest_row = efficient_frontier.loc[min_diff_index]
-
-                tp = pd.Series({
-                    'arithmetic_mu': [closest_row['arithmetic_mu']],
-                    'sigma': closest_row['sigma'],
-                    'md': ([closest_row['naive_md']], [closest_row['adjusted_md']]),
-                    'enb': closest_row['enb'],
-                    'div_ratio_sqrd': closest_row['div_ratio_sqrd'],
-                    'caaf_implied_epsilon': (closest_row['mv_arithmetic_mu'] - closest_row['arithmetic_mu'])/closest_row['mv_arithmetic_mu']
-                })
-                if "HY Credit" in closest_row.index:
-                    tw = closest_row.loc[['Equities', 'Gov Bonds', 'HY Credit', 'Gold', 'Alternatives']]
-                else:
-                    tw = closest_row.loc[['Equities', 'Gov Bonds', 'Gold', 'Alternatives']]
-
-                target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
-                target.temp["weights"] = tw.dropna()
-
-                print(target.now)
-                if target.now.date() == datetime.date(1885, 1, 31):
-                    print("Break")
-
-                return True
-        else:
-            target_md = self.target_md
-
-        selected = target.temp["selected"]
-        self.erc = WeighERC(
-            self.lookback,
-            self.initial_weights,
-            self.risk_weights,
-            self.covar_method,
-            self.risk_parity_method,
-            self.maximum_iterations,
-            self.tolerance,
-            self.lag,
-            self.additional_constraints,
-        )
-        self.erc(target)
-        erc_weights = target.temp["weights"]
-
-        if len(selected) == 0:
-            target.temp["weights"] = {}
-            return True
-
-        if len(selected) == 1:
-            target.temp["weights"] = {selected[0]: 1.0}
-            return True
-
-        print(target.now)
-        if target.now.date() == datetime.date(1983, 2, 28):
-            print("Break")
-
-        t0 = target.now - self.lag
-        prc = target.universe.loc[t0 - self.lookback : t0, selected]
-        if self.mode == "long_term":
-            prc = filter_columns_based_return_availability(prc)
-        if self.target_md != "frontier":
-            tw, tp = bt.ffn.calc_two_stage_weights(
-                returns=prc.to_returns().dropna(),
-                exp_rets=expected_returns.loc[target.now],
-                target_md=target_md,
-                epsilon=1-self.return_factor,
-                erc_weights=erc_weights,
-                weight_bounds=self.bounds,
-                additional_constraints=self.additional_constraints,
-                covar_method=self.covar_method,
-                const_covar=const_covar
-            )
-        elif self.target_md == "frontier":
-            tw, tp = bt.ffn.calc_two_stage_weights(
-                returns=prc.to_returns().dropna(),
-                exp_rets=expected_returns.loc[target.now],
-                target_volatility=closest_sigma,
-                epsilon=1-self.return_factor,
-                erc_weights=erc_weights,
-                weight_bounds=self.bounds,
-                additional_constraints=self.additional_constraints,
-                covar_method=self.covar_method,
-                const_covar=const_covar
-            )
-
-        target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
-        target.temp["weights"] = tw.dropna()
-
-        return True
-
 class WeighMaxDiv(Algo):
     def __init__(
         self,
@@ -1678,7 +1498,9 @@ class WeighMaxDiv(Algo):
         additional_constraints=None,
         mode="short_term",
         return_factor=0.95,
-        target_md=0.4
+        target_md=0.4,
+        target_volatility=0.07,
+        version_number=None
     ):
         super(WeighMaxDiv, self).__init__()
         self.lookback = lookback
@@ -1694,6 +1516,8 @@ class WeighMaxDiv(Algo):
         self.mode = mode
         self.return_factor = return_factor
         self.target_md = target_md
+        self.target_volatility = target_volatility
+        self.version_number = version_number
 
     def __call__(self, target):
         expected_returns = target.get_data('expected_returns')
@@ -1734,10 +1558,7 @@ class WeighMaxDiv(Algo):
         if self.mode == "short_term":
             prc = filter_columns_based_return_availability(prc)
 
-        ########################################################################
-        # Test
-
-        config = 5
+        config = self.version_number
         self.target_vol = 0.07
 
         year = target.now.year
@@ -1787,7 +1608,8 @@ class WeighCurrentCAAF(Algo):
         additional_constraints=None,
         mode="short_term",
         return_factor=0.95,
-        target_md=0.4
+        target_md=None,
+        target_volatility=None
     ):
         super(WeighCurrentCAAF, self).__init__()
         self.lookback = lookback
@@ -1803,6 +1625,7 @@ class WeighCurrentCAAF(Algo):
         self.mode = mode
         self.return_factor = return_factor
         self.target_md = target_md
+        self.target_volatility = target_volatility
 
     def __call__(self, target):
         expected_returns = target.get_data('expected_returns')
@@ -1834,8 +1657,6 @@ class WeighCurrentCAAF(Algo):
             return True
 
         print(target.now)
-        if target.now.date() == datetime.date(1984, 4, 30):
-            print("Break")
 
         t0 = target.now - self.lag
 
@@ -1843,11 +1664,190 @@ class WeighCurrentCAAF(Algo):
         if self.mode == "short_term":
             prc = filter_columns_based_return_availability(prc)
 
-
         tw, tp = bt.ffn.calc_current_caaf_weights(
             returns=prc.to_returns().dropna(),
             exp_rets=expected_returns.loc[target.now],
-            target_md=self.target_md,
+            #target_md=self.target_md,
+            target_volatility=self.target_volatility,
+            erc_weights=erc_weights,
+            weight_bounds=self.bounds,
+            additional_constraints=self.additional_constraints,
+            covar_method=self.covar_method,
+            const_covar=const_covar,
+            mode="frontier"
+        )
+
+        target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
+        target.temp["weights"] = tw.dropna()
+
+        return True
+
+
+class WeighCurrentCAAFMV(Algo):
+    def __init__(
+        self,
+        lookback=pd.DateOffset(months=3),
+        initial_weights=None,
+        risk_weights=None,
+        covar_method="ledoit-wolf",
+        risk_parity_method="ccd",
+        maximum_iterations=100,
+        tolerance=1e-8,
+        lag=pd.DateOffset(days=0),
+        bounds=(0.0, 1.0),
+        additional_constraints=None,
+        mode="short_term",
+        return_factor=0.95,
+        target_md=None,
+        target_volatility=None
+    ):
+        super(WeighCurrentCAAFMV, self).__init__()
+        self.lookback = lookback
+        self.initial_weights = initial_weights
+        self.risk_weights = risk_weights
+        self.covar_method = covar_method
+        self.risk_parity_method = risk_parity_method
+        self.maximum_iterations = maximum_iterations
+        self.tolerance = tolerance
+        self.lag = lag
+        self.bounds = bounds
+        self.additional_constraints = additional_constraints
+        self.mode = mode
+        self.return_factor = return_factor
+        self.target_md = target_md
+        self.target_volatility = target_volatility
+
+    def __call__(self, target):
+        expected_returns = target.get_data('expected_returns')
+        const_covar = target.get_data('const_covar')
+
+        selected = target.temp["selected"]
+        available_expected_returns = list(expected_returns.loc[target.now].dropna().index)
+        self.erc = WeighERC(
+            self.lookback,
+            self.initial_weights,
+            self.risk_weights,
+            self.covar_method,
+            self.risk_parity_method,
+            self.maximum_iterations,
+            self.tolerance,
+            self.lag,
+            self.additional_constraints,
+            const_covar.loc[available_expected_returns, available_expected_returns]
+        )
+        self.erc(target)
+        erc_weights = target.temp["weights"]
+
+        if len(selected) == 0:
+            target.temp["weights"] = {}
+            return True
+
+        if len(selected) == 1:
+            target.temp["weights"] = {selected[0]: 1.0}
+            return True
+
+        print(target.now)
+
+        t0 = target.now - self.lag
+
+        prc = target.universe.loc[t0 - self.lookback : t0, selected]
+        if self.mode == "short_term":
+            prc = filter_columns_based_return_availability(prc)
+
+        tw, tp = bt.ffn.calc_current_caaf_mv_weights(
+            returns=prc.to_returns().dropna(),
+            exp_rets=expected_returns.loc[target.now],
+            #target_md=self.target_md,
+            target_volatility=self.target_volatility,
+            erc_weights=erc_weights,
+            weight_bounds=self.bounds,
+            additional_constraints=self.additional_constraints,
+            covar_method=self.covar_method,
+            const_covar=const_covar,
+            mode="frontier"
+        )
+
+        target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
+        target.temp["weights"] = tw.dropna()
+
+        return True
+
+class WeighCurrentCAAFERC(Algo):
+    def __init__(
+        self,
+        lookback=pd.DateOffset(months=3),
+        initial_weights=None,
+        risk_weights=None,
+        covar_method="ledoit-wolf",
+        risk_parity_method="ccd",
+        maximum_iterations=100,
+        tolerance=1e-8,
+        lag=pd.DateOffset(days=0),
+        bounds=(0.0, 1.0),
+        additional_constraints=None,
+        mode="short_term",
+        return_factor=0.95,
+        target_md=None,
+        target_volatility=None
+    ):
+        super(WeighCurrentCAAFERC, self).__init__()
+        self.lookback = lookback
+        self.initial_weights = initial_weights
+        self.risk_weights = risk_weights
+        self.covar_method = covar_method
+        self.risk_parity_method = risk_parity_method
+        self.maximum_iterations = maximum_iterations
+        self.tolerance = tolerance
+        self.lag = lag
+        self.bounds = bounds
+        self.additional_constraints = additional_constraints
+        self.mode = mode
+        self.return_factor = return_factor
+        self.target_md = target_md
+        self.target_volatility = target_volatility
+
+    def __call__(self, target):
+        expected_returns = target.get_data('expected_returns')
+        const_covar = target.get_data('const_covar')
+
+        selected = target.temp["selected"]
+        available_expected_returns = list(expected_returns.loc[target.now].dropna().index)
+        self.erc = WeighERC(
+            self.lookback,
+            self.initial_weights,
+            self.risk_weights,
+            self.covar_method,
+            self.risk_parity_method,
+            self.maximum_iterations,
+            self.tolerance,
+            self.lag,
+            self.additional_constraints,
+            const_covar.loc[available_expected_returns, available_expected_returns]
+        )
+        self.erc(target)
+        erc_weights = target.temp["weights"]
+
+        if len(selected) == 0:
+            target.temp["weights"] = {}
+            return True
+
+        if len(selected) == 1:
+            target.temp["weights"] = {selected[0]: 1.0}
+            return True
+
+        print(target.now)
+
+        t0 = target.now - self.lag
+
+        prc = target.universe.loc[t0 - self.lookback : t0, selected]
+        if self.mode == "short_term":
+            prc = filter_columns_based_return_availability(prc)
+
+        tw, tp = bt.ffn.calc_current_caaf_erc_weights(
+            returns=prc.to_returns().dropna(),
+            exp_rets=expected_returns.loc[target.now],
+            #target_md=self.target_md,
+            target_volatility=self.target_volatility,
             erc_weights=erc_weights,
             weight_bounds=self.bounds,
             additional_constraints=self.additional_constraints,

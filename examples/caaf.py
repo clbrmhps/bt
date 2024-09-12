@@ -18,7 +18,7 @@ set_clbrm_style(caaf_colors=True)
 
 warnings.simplefilter(action='default', category=RuntimeWarning)
 
-version_number = 14
+version_number = 5
 # source_version_number = 12
 country = 'UK'
 two_stage_target_md = "frontier_only"
@@ -253,6 +253,8 @@ weighMaxDivAlgo = bt.algos.WeighMaxDiv(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
+    version_number=version_number,
+    target_volatility=0.07
 )
 
 weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
@@ -267,6 +269,37 @@ weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
+    target_volatility=0.074
+)
+
+weighCurrentCAAFMVAlgo = bt.algos.WeighCurrentCAAFMV(
+    lookback=pd.DateOffset(months=1000),
+    initial_weights=None,
+    risk_weights=None,
+    covar_method="constant",
+    risk_parity_method="slsqp",
+    maximum_iterations=100,
+    tolerance=1e-4,
+    lag=pd.DateOffset(days=0),
+    bounds=(0.0, 1.0),
+    additional_constraints=additional_constraints,
+    mode="long_term",
+    target_volatility=0.074
+)
+
+weighCurrentCAAFERCAlgo = bt.algos.WeighCurrentCAAFERC(
+    lookback=pd.DateOffset(months=1000),
+    initial_weights=None,
+    risk_weights=None,
+    covar_method="constant",
+    risk_parity_method="slsqp",
+    maximum_iterations=100,
+    tolerance=1e-4,
+    lag=pd.DateOffset(days=0),
+    bounds=(0.0, 1.0),
+    additional_constraints=additional_constraints,
+    mode="long_term",
+    target_volatility=0.074
 )
 
 runMonthlyAlgo = bt.algos.RunMonthly(
@@ -321,6 +354,34 @@ strat_current_caaf = bt.Strategy(
     ]
 )
 strat_current_caaf.perm["properties"] = pd.DataFrame()
+
+strat_current_caaf_mv = bt.Strategy(
+    'Current CAAF MV',
+    [
+        bt.algos.ExpectedReturns('expected_returns'),
+        bt.algos.ConstantCovar('const_covar'),
+        bt.algos.RunAfterDate('1875-01-31'),
+        selectTheseAlgo,
+        weighCurrentCAAFMVAlgo,
+        # bt.algos.Or([bt.algos.RunOnce(), bt.algos.RunIfOutOfTriggerThreshold(tolerance)]),
+        rebalAlgo
+    ]
+)
+strat_current_caaf_mv.perm["properties"] = pd.DataFrame()
+
+strat_current_caaf_erc = bt.Strategy(
+    'Current CAAF ERC',
+    [
+        bt.algos.ExpectedReturns('expected_returns'),
+        bt.algos.ConstantCovar('const_covar'),
+        bt.algos.RunAfterDate('1875-01-31'),
+        selectTheseAlgo,
+        weighCurrentCAAFERCAlgo,
+        # bt.algos.Or([bt.algos.RunOnce(), bt.algos.RunIfOutOfTriggerThreshold(tolerance)]),
+        rebalAlgo
+    ]
+)
+strat_current_caaf_erc.perm["properties"] = pd.DataFrame()
 
 # 1973-07-31
 strat_max_div = bt.Strategy(
@@ -395,7 +456,18 @@ backtest_current_caaf = bt.Backtest(
      integer_positions=False,
      additional_data=additional_data,
  )
-
+backtest_current_caaf_mv = bt.Backtest(
+        strat_current_caaf_mv,
+        pdf,
+        integer_positions=False,
+        additional_data=additional_data,
+    )
+backtest_current_caaf_erc = bt.Backtest(
+        strat_current_caaf_erc,
+        pdf,
+        integer_positions=False,
+        additional_data=additional_data,
+    )
 additional_data = {
     'expected_returns': er,
     'const_covar': const_covar,
@@ -427,11 +499,12 @@ backtest_erc = bt.Backtest(
 
 start_time = time.time()
 # res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
-res_target = bt.run(backtest_current_caaf, backtest_max_div)
-# res_target = bt.run(backtest_current_caaf)
+# res_target = bt.run(backtest_current_caaf, backtest_max_div)
+res_target = bt.run(backtest_current_caaf)
 # res_target = bt.run(backtest_max_div)
 
 # res_target = bt.run(backtest_4060, backtest_6040)
+# res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_current_caaf_mv, backtest_current_caaf_erc)
 
 res_target.get_security_weights(0)
 
@@ -474,7 +547,7 @@ def plot_stacked_area(df, method=None, country=None, version_number=None):
 bt_keys = list(res_target.keys())
 
 # For plotting stacked areas based on get_security_weights
-for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40/60', 'Max Div']:
+for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40/60', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC']:
     if method in bt_keys:
         if country == 'US':
             columns_to_plot = ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
@@ -483,11 +556,13 @@ for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40
         plot_stacked_area(res_target.get_security_weights(bt_keys.index(method)).loc[:, columns_to_plot], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
 
 # For plotting columns from res_target.backtests
-for method in ['Current CAAF', 'Max Div']:
+for method in ['Current CAAF', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC', '60/40', '40/60']:
     if method in res_target.backtests:
         current_df = res_target.backtests[method].strategy.perm['properties']
 
         plot_columns(res_target.backtests[method].strategy.perm['properties'], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
+
+        print(f"Mean of sigma of {method}: {current_df['sigma'].mean()}")
 
         # Plotting
         plt.figure(figsize=(10, 6))
@@ -507,7 +582,7 @@ for method in ['Current CAAF', 'Max Div']:
 # Price Plot
 
 # For extracting prices
-for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40', 'Max Div'], ['prices_twostage', 'prices_currentcaaf', 'prices_4060', 'prices_6040', 'prices_maxdiv']):
+for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC'], ['prices_twostage', 'prices_currentcaaf', 'prices_4060', 'prices_6040', 'prices_maxdiv', 'prices_currentcaaf_mv', 'prices_currentcaaf_erc']):
     if method in res_target.prices.columns:
         exec(f"{var_name} = res_target.prices.loc[:, '{method}']")
 
@@ -515,7 +590,7 @@ for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40', 'Max
 combined_prices = pd.DataFrame()
 
 # Loop through each portfolio methodology to extract and store prices
-for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40', 'Max Div'], ['prices_twostage', 'prices_currentcaaf', 'prices_4060', 'prices_6040', 'prices_maxdiv']):
+for method, var_name in zip(['Two Stage', 'Current CAAF', '40/60', '60/40', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC'], ['prices_twostage', 'prices_currentcaaf', 'prices_4060', 'prices_6040', 'prices_maxdiv', 'prices_currentcaaf_mv', 'prices_currentcaaf_erc']):
     if method in res_target.prices.columns:
         exec(f"{var_name} = res_target.prices.loc[:, '{method}']")
         exec(f"combined_prices['{method}'] = {var_name}")
@@ -542,6 +617,12 @@ if 'Two Stage' in bt_keys and '40/60' in bt_keys:
 
 if 'Current CAAF' in bt_keys:
     qs.reports.html(prices_currentcaaf.pct_change(), "Current CAAF", periods_per_year=12, output="Current_CAAF.html")
+
+if 'Current CAAF MV' in bt_keys:
+    qs.reports.html(prices_currentcaaf.pct_change(), "Current CAAF MV", periods_per_year=12, output="Current_CAAF_MV.html")
+
+if 'Current CAAF ERC' in bt_keys:
+    qs.reports.html(prices_currentcaaf.pct_change(), "Current CAAF ERC", periods_per_year=12, output="Current_CAAF_ERC.html")
 
 if 'Max Div' in bt_keys:
     qs.reports.html(prices_maxdiv.pct_change(), "Max Div", periods_per_year=12, output="Maximum_Diversification.html")
@@ -574,15 +655,6 @@ if 'Current CAAF' in bt_keys:# Compute the mean of the series
         verticalalignment='top', horizontalalignment='right',
         fontsize=12)
     plt.savefig(f"./images/turnover_current_caaf_{country}_{version_number}.png", dpi=300)
-    plt.show()
-
-if 'Two Stage' in bt_keys:
-    mean_turnover = backtest_two_stage.turnover.mean()
-    ax = backtest_two_stage.turnover.plot()
-    ax.text(0.95, 0.9, f'Mean: {mean_turnover:.2%}', transform=ax.transAxes,
-        verticalalignment='top', horizontalalignment='right',
-        fontsize=12)
-    plt.savefig(f"./images/turnover_two_stage_{country}_{version_number}.png", dpi=300)
     plt.show()
 
 for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40/60']:
