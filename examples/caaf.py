@@ -18,9 +18,23 @@ set_clbrm_style(caaf_colors=True)
 
 warnings.simplefilter(action='default', category=RuntimeWarning)
 
-version_number = 5
-# source_version_number = 12
-country = 'UK'
+def read_configs(file_path='./Configs.xlsx'):
+    configs = pd.read_excel(file_path, sheet_name='Sheet1')
+    return configs.to_dict('records')
+def get_config(config_number):
+    return [config for config in all_configs if config['Config'] == config_number][0]
+
+all_configs = read_configs()
+selected_config = get_config(6)
+
+version_number = selected_config['Config']
+country = selected_config['Country']
+target_volatility = selected_config['Target Volatility']
+additional_constraints = selected_config['Additional Constraints']
+
+if additional_constraints == 'None':
+    additional_constraints = None
+
 two_stage_target_md = "frontier_only"
 
 # Version number 1: US Base two_stage target_md 0.27
@@ -236,10 +250,9 @@ weighERCAlgo = bt.algos.WeighERC(
     lag = pd.DateOffset(months=0)
 )
 
-additional_constraints = {'alternatives_upper_bound': 0.144,
-                          'em_equities_upper_bound': 0.3,
-                          'hy_credit_upper_bound': 0.086,}
-additional_constraints = None
+# additional_constraints = {'alternatives_upper_bound': 0.144,
+#                           'em_equities_upper_bound': 0.3,
+#                           'hy_credit_upper_bound': 0.086,}
 
 weighMaxDivAlgo = bt.algos.WeighMaxDiv(
     lookback=pd.DateOffset(months=1000),
@@ -254,7 +267,7 @@ weighMaxDivAlgo = bt.algos.WeighMaxDiv(
     additional_constraints=additional_constraints,
     mode="long_term",
     version_number=version_number,
-    target_volatility=0.07
+    target_volatility=target_volatility
 )
 
 weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
@@ -269,7 +282,7 @@ weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    target_volatility=0.074
+    target_volatility=target_volatility+0.004
 )
 
 weighCurrentCAAFMVAlgo = bt.algos.WeighCurrentCAAFMV(
@@ -284,7 +297,7 @@ weighCurrentCAAFMVAlgo = bt.algos.WeighCurrentCAAFMV(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    target_volatility=0.074
+    target_volatility=target_volatility+0.004
 )
 
 weighCurrentCAAFERCAlgo = bt.algos.WeighCurrentCAAFERC(
@@ -299,7 +312,7 @@ weighCurrentCAAFERCAlgo = bt.algos.WeighCurrentCAAFERC(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    target_volatility=0.074
+    target_volatility=target_volatility+0.004
 )
 
 runMonthlyAlgo = bt.algos.RunMonthly(
@@ -500,11 +513,11 @@ backtest_erc = bt.Backtest(
 start_time = time.time()
 # res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
 # res_target = bt.run(backtest_current_caaf, backtest_max_div)
-res_target = bt.run(backtest_current_caaf)
+# res_target = bt.run(backtest_current_caaf)
 # res_target = bt.run(backtest_max_div)
 
 # res_target = bt.run(backtest_4060, backtest_6040)
-# res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_current_caaf_mv, backtest_current_caaf_erc)
+res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_current_caaf_mv, backtest_current_caaf_erc)
 
 res_target.get_security_weights(0)
 

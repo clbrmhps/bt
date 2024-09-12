@@ -14,6 +14,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 from scipy.optimize import minimize
+from concurrent.futures import ProcessPoolExecutor
 
 from meucci.torsion import torsion
 
@@ -24,39 +25,13 @@ warnings.simplefilter(action='default', category=RuntimeWarning)
 set_clbrm_style(caaf_colors=True)
 
 target_stdevs = np.arange(0.05, 0.13, 0.0025)
-target_volatility = 0.07
-epsilon = 0.01
-lambda_coeff = 1
 
 additional_constraints = {'alternatives_upper_bound': 0.144,
                           'em_equities_upper_bound': 0.3,
                           'hy_credit_upper_bound': 0.086,}
 additional_constraints = None
 
-config = 5
-country = "UK"
-
-rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
-rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
-rdf.set_index('Date', inplace=True)
-# rdf.dropna(inplace=True)
-
-er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
-er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
-er.set_index('Date', inplace=True)
-er.loc[:"1973-01-31", "Gold"] = np.nan
-
-const_covar = rdf.cov()
-covar = const_covar * 12
-
-plots_dir = f"./plots/config_{config}"
-os.makedirs(plots_dir, exist_ok=True)
-
-frontiers_dir = f"./frontiers/config_{config}"
-os.makedirs(frontiers_dir, exist_ok=True)
-
-start_date = pd.Timestamp('1875-01-31')
-dates = er.index.unique()[er.index.unique() >= start_date]
+configs_to_run = [6]
 
 def rgb_to_hex(rgb_str):
     rgb = rgb_str.replace('rgb', '').replace('(', '').replace(')', '').split(',')
@@ -211,7 +186,7 @@ def fmt(s):
         return ""
 
 def plot_charts(df, label, frontier_color, plot_filename_suffix, include_enb=False, include_dr=False,
-                selected_assets=None, selected_date=None, mv_df=None, plots_dir=None):
+                selected_assets=None, selected_date=None, mv_df=None, plots_dir=None, config=None, epsilon=None):
     plt.figure(figsize=(10, 6))
     ax = df.loc[:, selected_assets].plot(kind='bar', stacked=True, color=HEX_COLORS)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: '{:.0%}'.format(y)))
@@ -225,7 +200,7 @@ def plot_charts(df, label, frontier_color, plot_filename_suffix, include_enb=Fal
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
 
-    plot_filename = f"{plots_dir}/weight_distribution_{plot_filename_suffix}.png"
+    plot_filename = f"{plots_dir}/weight_distribution_{plot_filename_suffix}_{config['Config']}.png"
     plt.savefig(plot_filename)
     plt.clf()
 
@@ -244,14 +219,14 @@ def plot_charts(df, label, frontier_color, plot_filename_suffix, include_enb=Fal
     # if include_enb:
     #     plt.scatter(combined_df['sigma'], combined_df['arithmetic_mu'], c=combined_df['enb'], cmap='viridis', label='ENB')
 
-    plot_filename = f"{plots_dir}/frontiers_{plot_filename_suffix}.png"
+    plot_filename = f"{plots_dir}/frontiers_{plot_filename_suffix}_{config['Config']}.png"
     plt.savefig(plot_filename)
     plt.clf()
 
 def get_selected_assets(er: pd.DataFrame, current_date: pd.Timestamp) -> List[str]:
     return list(er.loc[current_date].dropna().index)
 
-def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country):
+def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country, target_volatility):
     w = cp.Variable(len(arithmetic_mu))
 
     objective = cp.Minimize(cp.quad_form(w, selected_covar))
@@ -306,7 +281,8 @@ def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_a
 
     return mv_df
 
-def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds, country):
+def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds, country,
+                               epsilon, lambda_coeff):
     n = len(arithmetic_mu)
 
     maxenb_weights = pd.Series(x0)
@@ -320,7 +296,7 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
     target_stdevs_above = target_stdevs[start_index:]
     target_stdevs_below = target_stdevs[:start_index][::-1]
 
-    penalty_coeff = lamba_coeff
+    penalty_coeff = lambda_coeff
 
     if len(target_stdevs_above) > 0:
         for target_vol in target_stdevs_above:
@@ -418,7 +394,7 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
 
 
 def save_and_plot_results(results_df: pd.DataFrame, mv_df: pd.DataFrame, current_date: pd.Timestamp,
-                          frontiers_dir: str, plots_dir: str, selected_assets: List[str]):
+                          frontiers_dir: str, plots_dir: str, selected_assets: List[str], config, epsilon):
     mv_df = mv_df.sort_values(by='Target Vol')
     try:
         results_df = results_df.sort_values(by='Target Vol')
@@ -429,11 +405,16 @@ def save_and_plot_results(results_df: pd.DataFrame, mv_df: pd.DataFrame, current
         mv_df['Adjusted Return'] = (1 - epsilon) * mv_df['Target Return']
         plot_charts(results_df, 'Max ENB Frontier', 'blue', f'enb_{current_date.date().strftime("%Y%m%d")}',
                     include_enb=True, selected_assets=selected_assets, selected_date=current_date, mv_df=mv_df,
-                    plots_dir=plots_dir)
+                    plots_dir=plots_dir, config=config, epsilon=epsilon)
 
-def process_date(selected_date: pd.Timestamp, er: pd.DataFrame, covar: pd.DataFrame, rdf: pd.DataFrame,
-                 frontiers_dir: str, plots_dir: str, country: str) -> Dict:
-    print(f"Processing date: {selected_date}")
+def process_date(args):
+    selected_date, er, covar, rdf, frontiers_dir, plots_dir, config = args
+    print(f"Processing date: {selected_date} for config: {config['Config']}")
+
+    country = config['Country']
+    epsilon = config['Epsilon']
+    lambda_coeff = config['Lambda']
+    additional_constraints = config['Additional Constraints']
 
     selected_assets = get_selected_assets(er, selected_date)
     selected_covar = covar.loc[selected_assets, selected_assets]
@@ -443,24 +424,63 @@ def process_date(selected_date: pd.Timestamp, er: pd.DataFrame, covar: pd.DataFr
     arithmetic_mu = selected_er + np.square(stds) / 2
 
     t_mt = torsion(selected_covar, 'minimum-torsion', method='exact')
-    x0 = np.full((len(selected_assets),), 1/len(selected_assets))
+    x0 = np.full((len(selected_assets),), 1 / len(selected_assets))
 
     bounds = [(0, 1) for _ in range(len(selected_assets))]
 
-    mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country)
-    results_df = calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds, country)
+    mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country, additional_constraints)
+    results_df = calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar,
+                                            selected_assets, x0, t_mt, bounds,
+                                            country, epsilon, lambda_coeff)
 
-    save_and_plot_results(results_df, mv_df, selected_date, frontiers_dir, plots_dir, selected_assets)
+    save_and_plot_results(results_df, mv_df, selected_date, frontiers_dir, plots_dir, selected_assets, config, epsilon)
 
-    return {"date": selected_date, "data": "Results processed successfully"}
+    return {"date": selected_date, "config": config['Config'], "data": "Results processed successfully"}
 
+def run_configs(configs_to_run=None):
+    all_configs = read_configs()
 
-if __name__ == "__main__":
-    from concurrent.futures import ProcessPoolExecutor
+    if configs_to_run is None:
+        configs_to_run = all_configs
+    else:
+        configs_to_run = [config for config in all_configs if config['Config'] in configs_to_run]
 
     num_cores = os.cpu_count()
 
-    with ProcessPoolExecutor(max_workers=num_cores) as executor:
-        results = list(executor.map(process_date, dates, [er] * len(dates), [covar] * len(dates), [rdf] * len(dates), [frontiers_dir] * len(dates), [plots_dir] * len(dates), [country] * len(dates)))
+    for config in configs_to_run:
+        print(f"Running configuration: {config['Config']}")
 
-    print(results)
+        country = config['Country']
+        frontiers_dir = f"./frontiers/config_{config['Config']}"
+        plots_dir = f"./plots/config_{config['Config']}"
+        os.makedirs(frontiers_dir, exist_ok=True)
+        os.makedirs(plots_dir, exist_ok=True)
+
+        rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
+        rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
+        rdf.set_index('Date', inplace=True)
+
+        er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
+        er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
+        er.set_index('Date', inplace=True)
+        er.loc[:"1973-01-31", "Gold"] = np.nan
+
+        const_covar = rdf.cov()
+        covar = const_covar * 12
+
+        start_date = pd.Timestamp('1875-01-31')
+        dates = er.index.unique()[er.index.unique() >= start_date]
+
+        with ProcessPoolExecutor(max_workers=num_cores) as executor:
+            args_list = [(date, er, covar, rdf, frontiers_dir, plots_dir, config) for date in dates]
+            results = list(executor.map(process_date, args_list))
+
+        print(f"Completed configuration: {config['Config']}")
+        print(results)
+
+def read_configs(file_path='./Configs.xlsx'):
+    configs = pd.read_excel(file_path, sheet_name='Sheet1')
+    return configs.to_dict('records')
+
+if __name__ == "__main__":
+    run_configs(configs_to_run=configs_to_run)
