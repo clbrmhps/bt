@@ -1578,7 +1578,7 @@ class WeighMaxDiv(Algo):
             'enb': closest_row['ENB'],
         })
 
-        all_asset_classes = ['Equities', 'HY Credit', 'Gov Bonds', 'Gold', 'Alternatives']
+        all_asset_classes = ['DM Equities', 'EM Equities', 'Equities', 'HY Credit', 'Gov Bonds', 'Gold', 'Alternatives']
         available_asset_classes = [column for column in all_asset_classes if column in closest_row.index]
         selected_asset_classes = list(closest_row[available_asset_classes].index)
 

@@ -1,4 +1,5 @@
 # Standard library imports
+import datetime
 import warnings
 
 from reporting.tools.style import set_clbrm_style
@@ -29,9 +30,8 @@ target_stdevs = np.arange(0.05, 0.13, 0.0025)
 additional_constraints = {'alternatives_upper_bound': 0.144,
                           'em_equities_upper_bound': 0.3,
                           'hy_credit_upper_bound': 0.086,}
-additional_constraints = None
 
-configs_to_run = [6]
+configs_to_run = [9]
 
 def rgb_to_hex(rgb_str):
     rgb = rgb_str.replace('rgb', '').replace('(', '').replace(')', '').split(',')
@@ -39,6 +39,8 @@ def rgb_to_hex(rgb_str):
 
 COLOR_MAPPING = {
     "Equities": "rgb(64, 75, 151)",
+    "DM Equities": "rgb(64, 75, 151)",
+    "EM Equities": "rgb(131, 140, 202)",
     "Gov Bonds": "rgb(144, 143, 74)",
     "Alternatives": "rgb(160, 84, 66)",
     "HY Credit": "rgb(154, 183, 235)",
@@ -227,7 +229,8 @@ def get_selected_assets(er: pd.DataFrame, current_date: pd.Timestamp) -> List[st
     return list(er.loc[current_date].dropna().index)
 
 def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country, target_volatility):
-    w = cp.Variable(len(arithmetic_mu))
+    n = len(arithmetic_mu)
+    w = cp.Variable(n)
 
     objective = cp.Minimize(cp.quad_form(w, selected_covar))
 
@@ -235,6 +238,9 @@ def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_a
     constraint_box = w >= 0
 
     constraints = [constraint_weight, constraint_box]
+    constraints = add_additional_constraints(constraints, additional_constraints,
+                                             library='cvxpy', country=country, cvxpy_w=w,
+                                             number_of_assets=n)
 
     problem = cp.Problem(objective, constraints)
     problem.solve()
@@ -257,7 +263,9 @@ def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_a
         constraint_box = w >= 0
 
         constraints = [constraint_weight, constraint_return, constraint_box]
-        constraints = add_additional_constraints(constraints, additional_constraints, library='cvxpy', country=country)
+        constraints = add_additional_constraints(constraints, additional_constraints,
+                                                 library='cvxpy', country=country, cvxpy_w=w,
+                                                 number_of_assets=n)
 
         try:
             problem = cp.Problem(objective, constraints)
@@ -278,6 +286,11 @@ def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_a
                 **dict(zip(selected_assets, w.value))
             }, index=[0])
             mv_df = pd.concat([mv_df, new_row], ignore_index=True)
+        else:
+            print(f"Problem status: {problem.status}")
+            continue
+            # for i, constraint in enumerate(constraints, 1):
+            #     print(f"Constraint {i}: {str(constraint)}")
 
     return mv_df
 
@@ -305,9 +318,9 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
             target_return = closest_row['Target Return']
 
             if math.isfinite(target_return):
-                new_row = pd.DataFrame({'Target Vol': target_vol, 'Target Return': target_return,
-                                      **dict(zip(selected_assets, closest_row[selected_assets]))}, index=[0])
-                mv_df = pd.concat([mv_df, new_row], ignore_index=True)
+                # new_row = pd.DataFrame({'Target Vol': target_vol, 'Target Return': target_return,
+                #                      **dict(zip(selected_assets, closest_row[selected_assets]))}, index=[0])
+                # mv_df = pd.concat([mv_df, new_row], ignore_index=True)
 
                 def enb_soft_constraint_objective(w, *args):
                     sigma, t_MT, weight_ref, norm, penalty_coeff = args
@@ -317,12 +330,14 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
 
                 weight_ref = maxenb_weights.to_numpy()
 
-                constraints = (
+                constraints = [
                     {'type': 'eq', 'fun': constraint_sum_to_one},
                     {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_vol)},
                     {'type': 'ineq', 'fun': lambda w: return_objective(w, arithmetic_mu) - (1 - epsilon) * target_return}
-                )
-                constraints = add_additional_constraints(constraints, additional_constraints, library='scipy', country=country)
+                ]
+                constraints = add_additional_constraints(constraints, additional_constraints,
+                                                         library='scipy', country=country,
+                                                         number_of_assets=n)
 
                 result = minimize(
                     enb_soft_constraint_objective,
@@ -350,9 +365,9 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
             target_return = closest_row['Target Return']
 
             if math.isfinite(target_return):
-                new_row = pd.DataFrame({'Target Vol': target_vol, 'Target Return': target_return,
-                                      **dict(zip(selected_assets, closest_row[selected_assets]))}, index=[0])
-                mv_df = pd.concat([mv_df, new_row], ignore_index=True)
+                # new_row = pd.DataFrame({'Target Vol': target_vol, 'Target Return': target_return,
+                #                      **dict(zip(selected_assets, closest_row[selected_assets]))}, index=[0])
+                # mv_df = pd.concat([mv_df, new_row], ignore_index=True)
 
                 ################################################################################################
                 # Maximum ENB Portfolio
@@ -365,12 +380,14 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
 
                 weight_ref = maxenb_weights.to_numpy()
 
-                constraints = (
+                constraints = [
                     {'type': 'eq', 'fun': constraint_sum_to_one},
                     {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_vol)},
                     {'type': 'ineq', 'fun': lambda w: return_objective(w, arithmetic_mu) - (1 - epsilon) * target_return}
-                )
-                constraints = add_additional_constraints(constraints, additional_constraints, library='scipy', country=country)
+                ]
+                constraints = add_additional_constraints(constraints, additional_constraints,
+                                                         library='scipy', country=country,
+                                                         number_of_assets=n)
 
                 result = minimize(
                     enb_soft_constraint_objective,
@@ -417,6 +434,7 @@ def process_date(args):
     additional_constraints = config['Additional Constraints']
 
     selected_assets = get_selected_assets(er, selected_date)
+    selected_assets = [asset for asset in selected_assets if asset != 'Cash']
     selected_covar = covar.loc[selected_assets, selected_assets]
     selected_er = er.loc[selected_date, selected_assets]
 
@@ -429,6 +447,7 @@ def process_date(args):
     bounds = [(0, 1) for _ in range(len(selected_assets))]
 
     mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country, additional_constraints)
+
     results_df = calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar,
                                             selected_assets, x0, t_mt, bounds,
                                             country, epsilon, lambda_coeff)
@@ -446,6 +465,7 @@ def run_configs(configs_to_run=None):
         configs_to_run = [config for config in all_configs if config['Config'] in configs_to_run]
 
     num_cores = os.cpu_count()
+    num_cores = 1
 
     for config in configs_to_run:
         print(f"Running configuration: {config['Config']}")
@@ -456,19 +476,30 @@ def run_configs(configs_to_run=None):
         os.makedirs(frontiers_dir, exist_ok=True)
         os.makedirs(plots_dir, exist_ok=True)
 
-        rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
-        rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
-        rdf.set_index('Date', inplace=True)
+        if not np.isnan(country):
+            rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
+            rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
+            rdf.set_index('Date', inplace=True)
 
-        er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
-        er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
-        er.set_index('Date', inplace=True)
-        er.loc[:"1973-01-31", "Gold"] = np.nan
+            er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
+            er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
+            er.set_index('Date', inplace=True)
+            er.loc[:"1973-01-31", "Gold"] = np.nan
+        elif np.isnan(country):
+            rdf = pd.read_excel(f"./data/2024-08-31 master_file.xlsx", sheet_name="cov")
+            rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
+            rdf.set_index('Date', inplace=True)
+
+            er = pd.read_excel(f"./data/2024-08-31 master_file.xlsx", sheet_name="expected_gross_return")
+            er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
+            er.set_index('Date', inplace=True)
+            er.loc[:"1973-01-31", "Gold"] = np.nan
 
         const_covar = rdf.cov()
         covar = const_covar * 12
 
-        start_date = pd.Timestamp('1875-01-31')
+        # start_date = pd.Timestamp('1875-01-31')
+        start_date = pd.Timestamp('1999-10-31')
         dates = er.index.unique()[er.index.unique() >= start_date]
 
         with ProcessPoolExecutor(max_workers=num_cores) as executor:

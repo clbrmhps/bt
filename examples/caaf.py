@@ -25,15 +25,24 @@ def get_config(config_number):
     return [config for config in all_configs if config['Config'] == config_number][0]
 
 all_configs = read_configs()
-selected_config = get_config(6)
+selected_config = get_config(9)
 
 version_number = selected_config['Config']
 country = selected_config['Country']
 target_volatility = selected_config['Target Volatility']
 additional_constraints = selected_config['Additional Constraints']
 
+if np.isnan(country):
+    equities = 'DM Equities'
+else:
+    equities = 'Equities'
+
 if additional_constraints == 'None':
     additional_constraints = None
+elif additional_constraints == 'Yes':
+    additional_constraints = {'alternatives_upper_bound': 0.144,
+                              'em_equities_upper_bound': 0.3,
+                              'hy_credit_upper_bound': 0.086,}
 
 two_stage_target_md = "frontier_only"
 
@@ -82,6 +91,9 @@ if country == 'US':
 else:
     color_mapping = {
     "Equities": "rgb(64, 75, 151)",
+    "DM Equities": "rgb(64, 75, 151)",
+    "EM Equities": "rgb(131, 140, 202)",
+    "HY Credit": "rgb(154, 183, 235)",
     "Gov Bonds": "rgb(144, 143, 74)",
     "Alternatives": "rgb(160, 84, 66)",
     "Gold": "rgb(216, 169, 23)"
@@ -98,6 +110,9 @@ if country == 'US':
 else:
     color_palette = {
     "Equities": (64/255, 75/255, 151/255),
+    "DM Equities": (64 / 255, 75 / 255, 151 / 255),
+    "EM Equities": (64 / 255, 75 / 255, 151 / 255),
+    "HY Credit": (154/255, 183/255, 235/255),
     "Gov Bonds": (144/255, 143/255, 74/255),
     "Alternatives": (160/255, 84/255, 66/255),
     "Gold": (216/255, 169/255, 23/255)
@@ -183,19 +198,36 @@ def drop_initial_duplicates(df: pd.DataFrame) -> pd.DataFrame:
 ################################################################################
 # Read in Files
 
-rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
-rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
-rdf.set_index('Date', inplace=True)
-# rdf.dropna(inplace=True)
+if not np.isnan(country):
+    rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
+    rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
+    rdf.set_index('Date', inplace=True)
+    # rdf.dropna(inplace=True)
 
-const_covar = rdf.cov()
-const_covar_scaled = const_covar * 12
-const_covar_scaled.to_parquet("const_covar_scaled.parquet")
+    const_covar = rdf.cov()
+    const_covar_scaled = const_covar * 12
+    const_covar_scaled.to_parquet("const_covar_scaled.parquet")
 
-er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
-er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
-er.set_index('Date', inplace=True)
-# er.dropna(inplace=True)
+    er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
+    er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
+    er.set_index('Date', inplace=True)
+    # er.dropna(inplace=True)
+else:
+    rdf = pd.read_excel(f"./data/2024-08-31 master_file.xlsx", sheet_name="cov")
+    rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
+    rdf = rdf.loc[rdf.loc[:, 'Date'] >= '1993-01-31', :]
+    rdf.set_index('Date', inplace=True)
+    # rdf.dropna(inplace=True)
+
+    const_covar = rdf.cov()
+    const_covar_scaled = const_covar * 12
+    const_covar_scaled.to_parquet("const_covar_scaled.parquet")
+
+    er = pd.read_excel(f"./data/2024-08-31 master_file.xlsx", sheet_name="expected_gross_return")
+    er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
+    er.set_index('Date', inplace=True)
+    er.drop(columns=['Cash'], inplace=True)
+    # er.dropna(inplace=True)
 
 def to_percent(y, position):
     return f"{y * 100:.0f}%"
@@ -219,11 +251,14 @@ er.loc[:"1973-01-31", "Gold"] = np.nan
 if 'Cash' in er.columns:
     er.drop(columns=['Cash'], inplace=True)
 
-asset_class_subset = ['Equities', 'Gov Bonds', 'Gold',
-                      'Alternatives']
-if country == 'US':
-    asset_class_subset += ['HY Credit']
-
+if not np.isnan(country):
+    asset_class_subset = [equities, 'Gov Bonds', 'Gold',
+                          'Alternatives']
+    if country == 'US':
+        asset_class_subset += ['HY Credit']
+else:
+    asset_class_subset = [equities, 'EM Equities', 'HY Credit',
+                          'Gov Bonds', 'Gold', 'Alternatives']
 
 pdf = 100*np.cumprod(1+rdf)
 # Melt the DataFrame to a long format which works better with seaborn
@@ -282,7 +317,7 @@ weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    target_volatility=target_volatility+0.004
+    target_volatility=target_volatility+0.036
 )
 
 weighCurrentCAAFMVAlgo = bt.algos.WeighCurrentCAAFMV(
@@ -319,10 +354,10 @@ runMonthlyAlgo = bt.algos.RunMonthly(
     run_on_first_date=True,
     run_on_end_of_period=True
 )
-weights = pd.Series([0.4, 0.6], index=['Equities', 'Gov Bonds'])
+weights = pd.Series([0.4, 0.6], index=[equities, 'Gov Bonds'])
 weigh4060Algo = bt.algos.WeighSpecified(**weights)
 
-weights = pd.Series([0.6, 0.4], index=['Equities', 'Gov Bonds'])
+weights = pd.Series([0.6, 0.4], index=[equities, 'Gov Bonds'])
 weigh6040Algo = bt.algos.WeighSpecified(**weights)
 
 weighEquallyAlgo = bt.algos.WeighEqually()
@@ -514,10 +549,11 @@ start_time = time.time()
 # res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
 # res_target = bt.run(backtest_current_caaf, backtest_max_div)
 # res_target = bt.run(backtest_current_caaf)
-# res_target = bt.run(backtest_max_div)
+res_target = bt.run(backtest_max_div)
 
 # res_target = bt.run(backtest_4060, backtest_6040)
-res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_current_caaf_mv, backtest_current_caaf_erc)
+# res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_current_caaf_mv, backtest_current_caaf_erc,
+#                    backtest_4060, backtest_6040)
 
 res_target.get_security_weights(0)
 
@@ -564,12 +600,17 @@ for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40
     if method in bt_keys:
         if country == 'US':
             columns_to_plot = ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
+        elif np.isnan(country):
+            columns_to_plot = [equities, "EM Equities", "HY Credit", "Gov Bonds", "Gold", "Alternatives"] if method != '60/40' and method != '40/60' else [equities, "Gov Bonds"]
         else:
             columns_to_plot = ["Equities", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
-        plot_stacked_area(res_target.get_security_weights(bt_keys.index(method)).loc[:, columns_to_plot], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
+        try:
+            plot_stacked_area(res_target.get_security_weights(bt_keys.index(method)).loc[:, columns_to_plot], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
+        except:
+            print('Break')
 
 # For plotting columns from res_target.backtests
-for method in ['Current CAAF', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC', '60/40', '40/60']:
+for method in ['Current CAAF', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC']:
     if method in res_target.backtests:
         current_df = res_target.backtests[method].strategy.perm['properties']
 
@@ -674,6 +715,8 @@ for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40
     if method in bt_keys:
         if country == 'US':
             columns_to_plot = ["Equities", "HY Credit", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
+        elif np.isnan(country):
+            columns_to_plot = [equities, "EM Equities", "HY Credit", "Gov Bonds", "Gold", "Alternatives"] if method != '60/40' and method != '40/60' else [equities, "Gov Bonds"]
         else:
             columns_to_plot = ["Equities", "Gov Bonds", "Alternatives", "Gold"] if method != '60/40' and method != '40/60' else ["Equities", "Gov Bonds"]
         transactions_df = res_target.get_transactions(method).reset_index()
