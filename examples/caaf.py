@@ -12,6 +12,7 @@ import bt
 import seaborn as sns
 from matplotlib.ticker import FuncFormatter
 import quantstats as qs
+import os
 
 from reporting.tools.style import set_clbrm_style
 set_clbrm_style(caaf_colors=True)
@@ -25,15 +26,25 @@ def get_config(config_number):
     return [config for config in all_configs if config['Config'] == config_number][0]
 
 all_configs = read_configs()
-selected_config = get_config(9)
+num_config = 16
+selected_config = get_config(num_config)
 
 version_number = selected_config['Config']
 country = selected_config['Country']
 target_volatility = selected_config['Target Volatility']
 additional_constraints = selected_config['Additional Constraints']
+tracking_error_constraint = selected_config['Tracking Error Constraint']
+tracking_error_limit = selected_config['Tracking Error Limit']
+
+if tracking_error_constraint != 'Yes':
+    tracking_error_limit = None
 
 if np.isnan(country):
     equities = 'DM Equities'
+    benchmarks = pd.read_excel(f'./data/benchmarks.xlsx', sheet_name='Sheet1')
+    benchmarks.rename(columns={'Unnamed: 0': 'Date'}, inplace=True)
+    benchmarks['Date'] = pd.to_datetime(benchmarks['Date'], format='%Y-%m-%d')
+    benchmarks.set_index('Date', inplace=True)
 else:
     equities = 'Equities'
 
@@ -164,6 +175,8 @@ def calculate_rolling_tracking_error(portfolio_returns, benchmark_returns, windo
     return pd.Series(rolling_tracking_errors, index=indices)
 
 def plot_columns(dataframe, method, country, version_number):
+    dataframe['sigma'] = dataframe['sigma'].round(8)
+
     fig, axes = plt.subplots(nrows=len(dataframe.columns), ncols=1, figsize=(10, 12))
     for i, column in enumerate(dataframe.columns):
         ax = axes[i]
@@ -172,7 +185,11 @@ def plot_columns(dataframe, method, country, version_number):
         ax.set_xlabel("Date")
         ax.set_ylabel("Value")
 
-    plt.tight_layout()
+    if method is not None:
+        plt.suptitle(f"Analysis using method: {method}", fontsize=16)
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
     if method is not None and country is not None and version_number is not None:
         plt.savefig(f"./images/properties_{method}_{country}_{version_number}.png", dpi=300)
 
@@ -212,7 +229,7 @@ if not np.isnan(country):
     er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
     er.set_index('Date', inplace=True)
     # er.dropna(inplace=True)
-else:
+elif np.isnan(country):
     rdf = pd.read_excel(f"./data/2024-08-31 master_file.xlsx", sheet_name="cov")
     rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
     rdf = rdf.loc[rdf.loc[:, 'Date'] >= '1993-01-31', :]
@@ -261,7 +278,6 @@ else:
                           'Gov Bonds', 'Gold', 'Alternatives']
 
 pdf = 100*np.cumprod(1+rdf)
-# Melt the DataFrame to a long format which works better with seaborn
 pdf_melted = pdf.reset_index().melt(id_vars=['Date'], value_name='Price', var_name='Asset')
 
 # Plot using seaborn
@@ -302,7 +318,7 @@ weighMaxDivAlgo = bt.algos.WeighMaxDiv(
     additional_constraints=additional_constraints,
     mode="long_term",
     version_number=version_number,
-    target_volatility=target_volatility
+    target_volatility=target_volatility,
 )
 
 weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
@@ -317,7 +333,8 @@ weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    target_volatility=target_volatility+0.036
+    target_volatility=target_volatility+0.036,
+    rdf=rdf
 )
 
 weighCurrentCAAFMVAlgo = bt.algos.WeighCurrentCAAFMV(
@@ -332,7 +349,8 @@ weighCurrentCAAFMVAlgo = bt.algos.WeighCurrentCAAFMV(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    target_volatility=target_volatility+0.004
+    target_volatility=target_volatility+0.004,
+    rdf=rdf
 )
 
 weighCurrentCAAFERCAlgo = bt.algos.WeighCurrentCAAFERC(
@@ -347,7 +365,8 @@ weighCurrentCAAFERCAlgo = bt.algos.WeighCurrentCAAFERC(
     bounds=(0.0, 1.0),
     additional_constraints=additional_constraints,
     mode="long_term",
-    target_volatility=target_volatility+0.004
+    target_volatility=target_volatility+0.004,
+    rdf=rdf
 )
 
 runMonthlyAlgo = bt.algos.RunMonthly(
@@ -548,12 +567,12 @@ backtest_erc = bt.Backtest(
 start_time = time.time()
 # res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_erc, backtest_equal, backtest_6040, backtest_4060)
 # res_target = bt.run(backtest_current_caaf, backtest_max_div)
-# res_target = bt.run(backtest_current_caaf)
-res_target = bt.run(backtest_max_div)
+res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_4060)
+# res_target = bt.run(backtest_max_div)
 
 # res_target = bt.run(backtest_4060, backtest_6040)
 # res_target = bt.run(backtest_current_caaf, backtest_max_div, backtest_current_caaf_mv, backtest_current_caaf_erc,
-#                    backtest_4060, backtest_6040)
+#                     backtest_4060, backtest_6040)
 
 res_target.get_security_weights(0)
 
@@ -561,41 +580,40 @@ res_target.get_security_weights(0)
 end_time = time.time()
 print("Time elapsed: ", end_time - start_time)
 
+# Backtest Finished
+####################################################################################################
+
+####################################################################################################
+# Plots & Reporting
+
 def plot_stacked_area(df, method=None, country=None, version_number=None):
-    # Prepare data
     x = pd.to_datetime(df.index).to_numpy()
     y = df.to_numpy().T
 
-    # Create plot and axes
     fig, ax = plt.subplots(figsize=(18, 10))
 
-    # Generate stackplot with colors from the tuple_color_mapping
     ax.stackplot(x, y, labels=df.columns, colors=[tuple_color_mapping[col] for col in df.columns], alpha=0.6)
 
-    # Configure x-axis for date format and ticks
     ax.xaxis.set_major_locator(mdates.MonthLocator(interval=48))
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
 
     ax.tick_params(axis='x', rotation=90)
 
-    # Format the y-axis as percentages
     ax.yaxis.set_major_formatter(FuncFormatter(percentage_formatter))
     ax.set_ylim(0, 1)
 
-    # Add legend
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles, labels, loc='upper left', bbox_to_anchor=(1, 1))
 
-    # Adjust layout to prevent clipping
     plt.tight_layout(rect=[0, 0, 0.85, 1])
     if method is not None and country is not None and version_number is not None:
         plt.savefig(f"./images/weights_{method}_{country}_{version_number}.png", dpi=300)
-    # Show plot
+
     plt.show()
 
 bt_keys = list(res_target.keys())
 
-# For plotting stacked areas based on get_security_weights
+# Stacked Area Chart for Security Weights
 for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40/60', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC']:
     if method in bt_keys:
         if country == 'US':
@@ -609,7 +627,31 @@ for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40
         except:
             print('Break')
 
-# For plotting columns from res_target.backtests
+####################################################################################################
+# ENB Comparison Chart
+
+enb_df = pd.DataFrame()
+for method in ['Current CAAF', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC']:
+    if method in res_target.backtests:
+        current_series = res_target.backtests[method].strategy.perm['properties']['enb']
+        current_series.name = f'{method}'
+        enb_df = pd.concat([enb_df, current_series], axis=1)
+
+enb_df.index = pd.to_datetime(enb_df.index)
+
+enb_df.plot(figsize=(10, 6))
+
+plt.title('Effective Number of Bets Over Time')
+plt.xlabel('Date')
+plt.ylabel('Effective Number of Bets')
+
+plt.legend(loc='best')
+plt.grid(True)
+plt.show()
+
+####################################################################################################
+# Properties Chart
+
 for method in ['Current CAAF', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC']:
     if method in res_target.backtests:
         current_df = res_target.backtests[method].strategy.perm['properties']
@@ -617,6 +659,10 @@ for method in ['Current CAAF', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC']
         plot_columns(res_target.backtests[method].strategy.perm['properties'], method.lower().replace(" ", "_").replace("/", "_"), country, version_number)
 
         print(f"Mean of sigma of {method}: {current_df['sigma'].mean()}")
+
+        file_name = f"properties_{num_config}_{method.lower().replace(' ', '_').replace('/', '_')}.csv"
+        file_path = os.path.join('./properties', file_name)
+        current_df.to_csv(file_path)
 
         # Plotting
         plt.figure(figsize=(10, 6))
@@ -661,25 +707,13 @@ plt.savefig(f"./images/price_series_log_scale_{country}_{version_number}.png", d
 plt.show()
 
 ################################################################################
-
+# Tracking Error
 # Calculate tracking error if both methods in the pair are in bt_keys
 if 'Current CAAF' in bt_keys and '40/60' in bt_keys:
     calculate_tracking_error(prices_currentcaaf.pct_change(), prices_4060.pct_change())
 
-if 'Two Stage' in bt_keys and '40/60' in bt_keys:
-    calculate_tracking_error(prices_twostage.pct_change(), prices_4060.pct_change())
-
-if 'Current CAAF' in bt_keys:
-    qs.reports.html(prices_currentcaaf.pct_change(), "Current CAAF", periods_per_year=12, output="Current_CAAF.html")
-
-if 'Current CAAF MV' in bt_keys:
-    qs.reports.html(prices_currentcaaf.pct_change(), "Current CAAF MV", periods_per_year=12, output="Current_CAAF_MV.html")
-
-if 'Current CAAF ERC' in bt_keys:
-    qs.reports.html(prices_currentcaaf.pct_change(), "Current CAAF ERC", periods_per_year=12, output="Current_CAAF_ERC.html")
-
-if 'Max Div' in bt_keys:
-    qs.reports.html(prices_maxdiv.pct_change(), "Max Div", periods_per_year=12, output="Maximum_Diversification.html")
+if 'Max Div' in bt_keys and '40/60' in bt_keys:
+    calculate_tracking_error(prices_maxdiv.pct_change(), prices_4060.pct_change())
 
 # Calculate and plot rolling tracking error if both methods in the pair are in bt_keys
 if 'Current CAAF' in bt_keys and '40/60' in bt_keys:
@@ -689,12 +723,46 @@ if 'Current CAAF' in bt_keys and '40/60' in bt_keys:
     plt.savefig(f"./images/rolling_tracking_error_current_caaf_40_60_{country}_{version_number}.png", dpi=300)
     plt.show()
 
-if 'Current CAAF' in bt_keys and '60/40' in bt_keys:
-    calc_track_err = calculate_rolling_tracking_error(prices_currentcaaf.pct_change(), prices_6040.pct_change())
+# Calculate and plot rolling tracking error if both methods in the pair are in bt_keys
+if 'Current CAAF' in bt_keys and '40/60' in bt_keys:
+    calc_track_err = calculate_rolling_tracking_error(prices_currentcaaf.pct_change(), prices_4060.pct_change())
     calc_track_err *= np.sqrt(12)
     calc_track_err.plot()
-    plt.savefig(f"./images/rolling_tracking_error_current_caaf_60_40_{country}_{version_number}.png", dpi=300)
+    plt.savefig(f"./images/rolling_tracking_error_current_caaf_40_60_{country}_{version_number}.png", dpi=300)
     plt.show()
+
+if 'Max Div' in bt_keys and '40/60' in bt_keys:
+    calc_track_err = calculate_rolling_tracking_error(prices_maxdiv.pct_change(), prices_4060.pct_change())
+    calc_track_err *= np.sqrt(12)
+    calc_track_err.plot()
+    plt.savefig(f"./images/rolling_tracking_error_max_div_40_60_{country}_{version_number}.png", dpi=300)
+    plt.show()
+
+################################################################################
+# QuantStats Reports
+
+if 'Current CAAF' in bt_keys:
+    qs.reports.html(prices_currentcaaf.pct_change(), "Current CAAF", periods_per_year=12,
+                    output="./qs_reports/Current_CAAF.html",
+                    download_filename="./qs_reports/Current_CAAF.html")
+
+if 'Current CAAF MV' in bt_keys:
+    qs.reports.html(prices_currentcaaf.pct_change(), "Current CAAF MV", periods_per_year=12,
+                    output="./qs_reports/Current_CAAF_MV.html",
+                    download_filename="./qs_reports/Current_CAAF_MV.html")
+
+if 'Current CAAF ERC' in bt_keys:
+    qs.reports.html(prices_currentcaaf.pct_change(), "Current CAAF ERC", periods_per_year=12,
+                    output="./qs_reports/Current_CAAF_ERC.html",
+                    download_filename="./qs_reports/Current_CAAF_ERC.html")
+
+if 'Max Div' in bt_keys:
+    qs.reports.html(prices_maxdiv.pct_change(), "Max Div", periods_per_year=12,
+                    output="./qs_reports/Maximum_Diversification.html",
+                    download_filename="./qs_reports/Maximum_Diversification.html")
+
+####################################################################################################
+# Ratio Plots
 
 if 'Current CAAF' in bt_keys and 'Two Stage' in bt_keys:
     ratio = res_target.prices.loc[:, "Two Stage"]/res_target.prices.loc[:, "Current CAAF"]
@@ -702,7 +770,10 @@ if 'Current CAAF' in bt_keys and 'Two Stage' in bt_keys:
     plt.savefig(f"./images/ratio_plot_current_caaf_two_stage_{country}_{version_number}.png", dpi=300)
     plt.show()
 
-if 'Current CAAF' in bt_keys:# Compute the mean of the series
+####################################################################################################
+# Turnover Plots
+
+if 'Current CAAF' in bt_keys:
     mean_turnover = backtest_current_caaf.turnover.mean()
     ax = backtest_current_caaf.turnover.plot()
     ax.text(0.95, 0.9, f'Mean: {mean_turnover:.2%}', transform=ax.transAxes,
@@ -710,6 +781,9 @@ if 'Current CAAF' in bt_keys:# Compute the mean of the series
         fontsize=12)
     plt.savefig(f"./images/turnover_current_caaf_{country}_{version_number}.png", dpi=300)
     plt.show()
+
+####################################################################################################
+# Transactions Figures
 
 for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40/60']:
     if method in bt_keys:

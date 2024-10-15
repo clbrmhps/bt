@@ -62,7 +62,16 @@ def pf_moments(weight, mu, is_geo, cov):
 #            'naive_md': naive_md,
 #            'adjusted_md': adjusted_md}
 
-def add_row_to_target_perm(tp, target_now, target_perm, properties=['arithmetic_mu', 'sigma', 'naive_md', 'adjusted_md', 'enb', 'div_ratio_sqrd', 'caaf_implied_epsilon']):
+def add_row_to_target_perm(tp, target_now, target_perm,
+                           properties=['arithmetic_mu',
+                                       'sigma',
+                                       'naive_md',
+                                       'adjusted_md',
+                                       'enb',
+                                       'div_ratio_sqrd',
+                                       'caaf_implied_epsilon',
+                                       'tracking_error',
+                                       'effective_rank']):
     new_row_data = {}
 
     for prop in properties:
@@ -1500,7 +1509,8 @@ class WeighMaxDiv(Algo):
         return_factor=0.95,
         target_md=0.4,
         target_volatility=0.07,
-        version_number=None
+        tracking_error_limit=None,
+        version_number=None,
     ):
         super(WeighMaxDiv, self).__init__()
         self.lookback = lookback
@@ -1559,7 +1569,7 @@ class WeighMaxDiv(Algo):
             prc = filter_columns_based_return_availability(prc)
 
         config = self.version_number
-        self.target_vol = 0.07
+        self.target_vol = self.target_volatility
 
         year = target.now.year
         month = target.now.month
@@ -1569,13 +1579,23 @@ class WeighMaxDiv(Algo):
         formatted_date = f"{year}{month:02d}{day:02d}"
         model_data = pd.read_pickle(f"./frontiers/config_{config}/enb_{formatted_date}")
 
-        closest_index = (model_data['Sigma'] - self.target_vol).abs().idxmin()
-        closest_row = model_data.loc[closest_index]
+        filtered_data = model_data[model_data['Sigma'] <= self.target_vol+0.0005]
+
+        if not filtered_data.empty:
+            closest_index = (filtered_data['Sigma'] - self.target_vol).abs().idxmin()
+            closest_row = filtered_data.loc[closest_index]
+        else:
+            raise ValueError("No portfolio at a lower volatility available")
+
+        print(f"Closest row: {closest_row['Sigma']}")
 
         tp = pd.Series({
             'arithmetic_mu': [closest_row['Return']],
             'sigma': closest_row['Sigma'],
             'enb': closest_row['ENB'],
+            'tracking_error': closest_row['Tracking Error'],
+            'div_ratio_sqrd': closest_row['Diversification Ratio Squared'],
+            'effective_rank': closest_row['Effective Rank'],
         })
 
         all_asset_classes = ['DM Equities', 'EM Equities', 'Equities', 'HY Credit', 'Gov Bonds', 'Gold', 'Alternatives']
@@ -1609,7 +1629,8 @@ class WeighCurrentCAAF(Algo):
         mode="short_term",
         return_factor=0.95,
         target_md=None,
-        target_volatility=None
+        target_volatility=None,
+        rdf=None
     ):
         super(WeighCurrentCAAF, self).__init__()
         self.lookback = lookback
@@ -1626,6 +1647,7 @@ class WeighCurrentCAAF(Algo):
         self.return_factor = return_factor
         self.target_md = target_md
         self.target_volatility = target_volatility
+        self.rdf = rdf
 
     def __call__(self, target):
         expected_returns = target.get_data('expected_returns')
@@ -1674,7 +1696,8 @@ class WeighCurrentCAAF(Algo):
             additional_constraints=self.additional_constraints,
             covar_method=self.covar_method,
             const_covar=const_covar,
-            mode="frontier"
+            mode="frontier",
+            rdf=self.rdf
         )
 
         target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
@@ -1699,7 +1722,8 @@ class WeighCurrentCAAFMV(Algo):
         mode="short_term",
         return_factor=0.95,
         target_md=None,
-        target_volatility=None
+        target_volatility=None,
+        rdf=None
     ):
         super(WeighCurrentCAAFMV, self).__init__()
         self.lookback = lookback
@@ -1716,7 +1740,7 @@ class WeighCurrentCAAFMV(Algo):
         self.return_factor = return_factor
         self.target_md = target_md
         self.target_volatility = target_volatility
-
+        self.rdf = rdf
     def __call__(self, target):
         expected_returns = target.get_data('expected_returns')
         const_covar = target.get_data('const_covar')
@@ -1764,7 +1788,8 @@ class WeighCurrentCAAFMV(Algo):
             additional_constraints=self.additional_constraints,
             covar_method=self.covar_method,
             const_covar=const_covar,
-            mode="frontier"
+            mode="frontier",
+            rdf=self.rdf
         )
 
         target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
@@ -1788,7 +1813,8 @@ class WeighCurrentCAAFERC(Algo):
         mode="short_term",
         return_factor=0.95,
         target_md=None,
-        target_volatility=None
+        target_volatility=None,
+        rdf=None
     ):
         super(WeighCurrentCAAFERC, self).__init__()
         self.lookback = lookback
@@ -1805,6 +1831,7 @@ class WeighCurrentCAAFERC(Algo):
         self.return_factor = return_factor
         self.target_md = target_md
         self.target_volatility = target_volatility
+        self.rdf = rdf
 
     def __call__(self, target):
         expected_returns = target.get_data('expected_returns')
@@ -1853,7 +1880,8 @@ class WeighCurrentCAAFERC(Algo):
             additional_constraints=self.additional_constraints,
             covar_method=self.covar_method,
             const_covar=const_covar,
-            mode="frontier"
+            mode="frontier",
+            rdf=self.rdf
         )
 
         target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
