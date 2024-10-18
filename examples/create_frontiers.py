@@ -29,13 +29,13 @@ from examples.effective_rank_calculator import EffectiveRankCalculator
 warnings.simplefilter(action='default', category=RuntimeWarning)
 set_clbrm_style(caaf_colors=True)
 
-target_stdevs = np.arange(0.01, 0.13, 0.00025)
+target_stdevs = np.arange(0.01, 0.13, 0.0025)
 
 additional_constraints = {'alternatives_upper_bound': 0.144,
                           'em_equities_upper_bound': 0.3,
                           'hy_credit_upper_bound': 0.086,}
 
-configs_to_run = [16]
+configs_to_run = [19]
 
 def rgb_to_hex(rgb_str):
     rgb = rgb_str.replace('rgb', '').replace('(', '').replace(')', '').split(',')
@@ -69,12 +69,25 @@ def calculate_portfolio_properties(caaf_weights, arithmetic_mu, covar):
     t_mt = torsion(covar, 'minimum-torsion', method='exact')
     p, enb = EffectiveBets(aligned_weights.to_numpy(), covar.to_numpy(), t_mt)
 
+    t_pca = torsion(covar, 'pca', method='exact')
+    p_pca, enb_pca = EffectiveBets(aligned_weights.to_numpy(), covar.to_numpy(), t_pca)
+
+    herfindahl_index = np.sum(np.square(aligned_weights))
+
+    marginal_contribution = np.dot(covar, aligned_weights) / portfolio_sigma
+    risk_contributions = np.multiply(marginal_contribution, aligned_weights)
+    normalized_rc = risk_contributions / np.sum(risk_contributions)
+    herfindahl_index_rc = np.sum(np.square(normalized_rc))
+
     portfolio_properties = pd.Series({
         'arithmetic_mu': portfolio_arithmetic_mu,
         'sigma': portfolio_sigma,
         'md': portfolio_md,
         'enb': enb[0, 0],
-        'div_ratio_sqrd': div_ratio_squared
+        'div_ratio_sqrd': div_ratio_squared,
+        'enb_pca': enb_pca[0, 0],
+        'herfindahl_index': herfindahl_index,
+        'herfindahl_index_rc': herfindahl_index_rc
     })
 
     return portfolio_properties
@@ -234,7 +247,31 @@ def plot_charts(df, label, frontier_color, plot_filename_suffix, include_enb=Fal
 def get_selected_assets(er: pd.DataFrame, current_date: pd.Timestamp) -> List[str]:
     return list(er.loc[current_date].dropna().index)
 
-def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country, target_volatility):
+def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country,
+                                       additional_constraints, tracking_error_limit, rdf, benchmarks):
+
+    calculator = EffectiveRankCalculator(algorithm=None,
+                                         minRank=1,
+                                         tickers=[],
+                                         period=252 * 2,
+                                         pctChangePeriod=21,
+                                         covar_method='',
+                                         resolution=None)
+
+    benchmark_returns = benchmarks['40/60'].pct_change().dropna()
+
+    pdf = 100 * np.cumprod(1 + rdf)
+    calculator.calculate(prices=pdf.loc[:, selected_assets])
+
+    combined_returns = rdf.copy()
+    combined_returns['40/60'] = benchmarks['40/60'].pct_change().dropna()
+
+    combined_returns = combined_returns.dropna()
+    # combined_returns = combined_returns.loc[combined_returns.index <= selected_date]
+    cov_matrix = combined_returns.cov() * 12
+    asset_benchmark_covar = cov_matrix.loc[selected_assets, '40/60']
+    benchmark_var = np.var(benchmark_returns) * 12
+
     n = len(arithmetic_mu)
     w = cp.Variable(n)
 
@@ -248,10 +285,13 @@ def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_a
                                              library='cvxpy', country=country, cvxpy_w=w,
                                              number_of_assets=n)
 
-    problem = cp.Problem(objective, constraints)
-    problem.solve()
+    if tracking_error_limit is not None:
+        constraints += [tracking_error_constraint_cvxpy(w, selected_covar, asset_benchmark_covar, benchmark_var, tracking_error_limit)]
 
-    if problem.status == cp.OPTIMAL:
+    problem = cp.Problem(objective, constraints)
+    problem.solve(qcp=True)
+
+    if problem.status == cp.OPTIMAL or problem.status == cp.OPTIMAL_INACCURATE:
         min_var_weights = w.value
         min_var_expected_return = np.sum(min_var_weights * arithmetic_mu)
 
@@ -310,8 +350,18 @@ def tracking_error_constraint(weights, asset_covar, asset_benchmark_covar, bench
     tracking_error = calculate_tracking_error(weights, asset_covar, asset_benchmark_covar, benchmark_var)
     return tracking_error_limit - tracking_error
 
+def calculate_tracking_error_cvxpy(weights, asset_covar, asset_benchmark_covar, benchmark_var):
+    portfolio_variance = cp.quad_form(weights, asset_covar)
+    cross_term = weights.T @ asset_benchmark_covar
+    tracking_error = cp.sqrt(portfolio_variance - 2 * cross_term + benchmark_var)
+    return tracking_error
+
+def tracking_error_constraint_cvxpy(weights, asset_covar, asset_benchmark_covar, benchmark_var, tracking_error_limit):
+    tracking_error = calculate_tracking_error_cvxpy(weights, asset_covar, asset_benchmark_covar, benchmark_var)
+    return tracking_error <= tracking_error_limit
+
 def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds, country,
-                               epsilon, lambda_coeff, rdf, benchmarks, tracking_error_limit, selected_date,
+                               epsilon, lambda_coeff, rdf, benchmarks, tracking_error_limit, selected_date, additional_constraints,
                                tracking_error_increment=0.025, max_tracking_error=None):
     calculator = EffectiveRankCalculator(algorithm=None,
                                          minRank=1,
@@ -412,6 +462,8 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
                         new_row = pd.DataFrame({'ENB': -result.fun, 'Target Vol': target_vol, 'Return': portfolio_properties['arithmetic_mu'][0],
                                                 'Sigma': portfolio_properties['sigma'], 'Tracking Error': calculate_tracking_error(result.x, selected_covar, asset_benchmark_covar, benchmark_var),
                                                 'Diversification Ratio Squared': portfolio_properties['div_ratio_sqrd'], 'Effective Rank': calculator.effectiveRank,
+                                                'Herfindahl Index': portfolio_properties['herfindahl_index'], 'Herfindahl Index RC': portfolio_properties['herfindahl_index_rc'],
+                                                'ENB PCA': portfolio_properties['enb_pca'], 'Date': selected_date,
                                                 **dict(zip(selected_assets, result.x))}, index=[0])
                         results_df = pd.concat([results_df, new_row], ignore_index=True)
 
@@ -526,6 +578,9 @@ def process_date(args):
     tracking_error_constraint = config['Tracking Error Constraint']
     tracking_error_limit = config['Tracking Error Limit']
 
+    if additional_constraints == 'None':
+        additional_constraints = None
+
     if tracking_error_constraint != 'Yes':
         tracking_error_limit = None
 
@@ -542,18 +597,22 @@ def process_date(args):
 
     bounds = [(0, 1) for _ in range(len(selected_assets))]
 
-    mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country, additional_constraints)
+    mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country,
+                                               additional_constraints, tracking_error_limit, rdf,
+                                               benchmarks)
 
     results_df = calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar,
                                             selected_assets, x0, t_mt, bounds,
                                             country, epsilon, lambda_coeff, rdf, benchmarks, tracking_error_limit,
-                                            selected_date)
+                                            selected_date, additional_constraints)
 
     save_and_plot_results(results_df, mv_df, selected_date, frontiers_dir, plots_dir, selected_assets, config, epsilon)
 
-    plot_tracking_error_chart =  True
+    plot_tracking_error_chart = False
     if plot_tracking_error_chart:
-        tracking_error_limits = np.arange(0.01, 0.10, 0.001)
+        benchmark_expected_return = selected_er['DM Equities'] * 0.4 + selected_er['Gov Bonds'] * 0.6
+
+        tracking_error_limits = np.arange(0.01, 0.11, 0.01)
         target_volatility = 0.06274
 
         selected_rows = pd.DataFrame()
@@ -561,12 +620,14 @@ def process_date(args):
         for tracking_error_limit in tracking_error_limits:
             print(f"Running optimization with tracking error limit: {tracking_error_limit:.3f}")
 
-            mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country, additional_constraints)
+            mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country,
+                                                       additional_constraints, tracking_error_limit, rdf,
+                                                       benchmarks)
 
             results_df = calculate_max_enb_frontier(
                 mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds,
                 country, epsilon, lambda_coeff, rdf, benchmarks, tracking_error_limit,
-                selected_date
+                selected_date, additional_constraints
             )
 
             filtered_df = results_df[results_df['Sigma'] <= target_volatility]
@@ -582,6 +643,12 @@ def process_date(args):
 
         plt.figure(figsize=(10, 6))
         plt.scatter(selected_rows['Tracking Error'], selected_rows['Return'], marker='o')
+
+        default_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+        fourth_color = default_colors[3]
+
+        plt.scatter(0, benchmark_expected_return, color=fourth_color, marker='o', label='Benchmark Expected Return')
+
         plt.gca().xaxis.set_major_formatter(PercentFormatter(1))
         plt.gca().yaxis.set_major_formatter(PercentFormatter(1))
         plt.xlabel('Tracking Error')
@@ -594,7 +661,8 @@ def process_date(args):
         plt.xlim(right=max_te * 1.1)
         plt.ylim(top=max_return * 1.1)
         plt.grid(True)
-        plt.show()
+
+        plt.savefig(f'{plots_dir}/tracking_error_frontier_{selected_date.strftime("%Y%m%d")}_{config["Config"]}.png')
 
     return {"date": selected_date, "config": config['Config'], "data": "Results processed successfully"}
 
@@ -606,8 +674,8 @@ def run_configs(configs_to_run=None):
     else:
         configs_to_run = [config for config in all_configs if config['Config'] in configs_to_run]
 
-    # num_cores = os.cpu_count()
-    num_cores = 1
+    num_cores = os.cpu_count()
+    # num_cores = 1
 
     for config in configs_to_run:
         print(f"Running configuration: {config['Config']}")
@@ -652,7 +720,7 @@ def run_configs(configs_to_run=None):
 
         start_date = pd.Timestamp('1885-01-31')
         # start_date = pd.Timestamp('2017-01-31')
-        # start_date = pd.Timestamp('1999-10-31')
+        # start_date = pd.Timestamp('1998-10-31')
         dates = er.index.unique()[er.index.unique() >= start_date]
 
         with ProcessPoolExecutor(max_workers=num_cores) as executor:
