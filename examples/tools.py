@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+
 def calculate_tracking_error(weights, asset_covar, asset_benchmark_covar, benchmark_var):
     portfolio_variance = np.dot(np.dot(weights, asset_covar), weights)
     cross_term = np.dot(weights, asset_benchmark_covar)

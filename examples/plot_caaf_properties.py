@@ -34,5 +34,5 @@ def plot_properties(properties_folder, config_subset=None):
         plt.show()
 
 properties_folder = './properties'
-config_subset = [10]
+config_subset = [19]
 plot_properties(properties_folder, config_subset)

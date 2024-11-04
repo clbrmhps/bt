@@ -26,7 +26,7 @@ def get_config(config_number):
     return [config for config in all_configs if config['Config'] == config_number][0]
 
 all_configs = read_configs()
-num_config = 16
+num_config = 19
 selected_config = get_config(num_config)
 
 version_number = selected_config['Config']
@@ -232,13 +232,19 @@ if not np.isnan(country):
 elif np.isnan(country):
     rdf = pd.read_excel(f"./data/2024-08-31 master_file.xlsx", sheet_name="cov")
     rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
-    rdf = rdf.loc[rdf.loc[:, 'Date'] >= '1993-01-31', :]
+    # rdf = rdf.loc[rdf.loc[:, 'Date'] >= '1993-01-31', :]
     rdf.set_index('Date', inplace=True)
     # rdf.dropna(inplace=True)
 
     const_covar = rdf.cov()
     const_covar_scaled = const_covar * 12
     const_covar_scaled.to_parquet("const_covar_scaled.parquet")
+
+    rdf = pd.read_excel(f"./data/2024-08-31 master_file.xlsx", sheet_name="cov")
+    rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
+    rdf = rdf.loc[rdf.loc[:, 'Date'] >= '1993-01-31', :]
+    rdf.set_index('Date', inplace=True)
+    # rdf.dropna(inplace=True)
 
     er = pd.read_excel(f"./data/2024-08-31 master_file.xlsx", sheet_name="expected_gross_return")
     er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
