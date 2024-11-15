@@ -17,4 +17,6 @@ def read_benchmark_returns():
     benchmarks['Date'] = pd.to_datetime(benchmarks['Date'], format='%Y-%m-%d')
     benchmarks.set_index('Date', inplace=True)
 
+    benchmarks = (1 + benchmarks).cumprod() * 100
+
     return benchmarks

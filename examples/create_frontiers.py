@@ -25,7 +25,6 @@ from ffn.core import add_additional_constraints
 from examples.tools import read_benchmark_returns
 from examples.effective_rank_calculator import EffectiveRankCalculator
 
-
 warnings.simplefilter(action='default', category=RuntimeWarning)
 set_clbrm_style(caaf_colors=True)
 
@@ -35,7 +34,7 @@ additional_constraints = {'alternatives_upper_bound': 0.144,
                           'em_equities_upper_bound': 0.3,
                           'hy_credit_upper_bound': 0.086,}
 
-configs_to_run = [19]
+configs_to_run = [26]
 
 def rgb_to_hex(rgb_str):
     rgb = rgb_str.replace('rgb', '').replace('(', '').replace(')', '').split(',')
@@ -258,18 +257,18 @@ def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_a
                                          covar_method='',
                                          resolution=None)
 
-    benchmark_returns = benchmarks['40/60'].pct_change().dropna()
+    benchmark_returns = benchmarks['Flex'].pct_change().dropna()
 
     pdf = 100 * np.cumprod(1 + rdf)
     calculator.calculate(prices=pdf.loc[:, selected_assets])
 
     combined_returns = rdf.copy()
-    combined_returns['40/60'] = benchmarks['40/60'].pct_change().dropna()
+    combined_returns['Flex'] = benchmarks['Flex'].pct_change().dropna()
 
     combined_returns = combined_returns.dropna()
     # combined_returns = combined_returns.loc[combined_returns.index <= selected_date]
     cov_matrix = combined_returns.cov() * 12
-    asset_benchmark_covar = cov_matrix.loc[selected_assets, '40/60']
+    asset_benchmark_covar = cov_matrix.loc[selected_assets, 'Flex']
     benchmark_var = np.var(benchmark_returns) * 12
 
     n = len(arithmetic_mu)
@@ -343,7 +342,17 @@ def perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_a
 def calculate_tracking_error(weights, asset_covar, asset_benchmark_covar, benchmark_var):
     portfolio_variance = np.dot(np.dot(weights, asset_covar), weights)
     cross_term = np.dot(weights, asset_benchmark_covar)
-    tracking_error = np.sqrt(portfolio_variance - 2 * cross_term + benchmark_var)
+    tracking_error_variance = portfolio_variance - 2 * cross_term + benchmark_var
+    if tracking_error_variance < 0:
+        print(f"Tracking error variance is negative: {tracking_error_variance:.3f}")
+    tracking_error = np.sqrt(tracking_error_variance)
+    return tracking_error
+
+def calculate_tracking_error_base(asset_returns, benchmark_returns, weights):
+    portfolio_returns = np.dot(asset_returns, weights)
+    return_differences = portfolio_returns - benchmark_returns
+    tracking_error = np.std(return_differences) * np.sqrt(12)
+
     return tracking_error
 
 def tracking_error_constraint(weights, asset_covar, asset_benchmark_covar, benchmark_var, tracking_error_limit):
@@ -374,22 +383,19 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
     n = len(arithmetic_mu)
 
     maxenb_weights = pd.Series(x0)
-
     results_df = pd.DataFrame(columns=selected_assets)
+    benchmark_returns = benchmarks['Flex'].pct_change().dropna()
 
-    benchmark_returns = benchmarks['40/60'].pct_change().dropna()
-
-    pdf = 100 * np.cumprod(1 + rdf)
-    calculator.calculate(prices=pdf.loc[:, selected_assets])
+    calculator.calculate(covarianceMatrix=selected_covar.to_numpy())
 
     combined_returns = rdf.copy()
-    combined_returns['40/60'] = benchmarks['40/60'].pct_change().dropna()
+    combined_returns['Flex'] = benchmarks['Flex'].pct_change().dropna()
 
     combined_returns = combined_returns.dropna()
     # combined_returns = combined_returns.loc[combined_returns.index <= selected_date]
     cov_matrix = combined_returns.cov() * 12
-    asset_benchmark_covar = cov_matrix.loc[selected_assets, '40/60']
-    benchmark_var = np.var(benchmark_returns) * 12
+    asset_benchmark_covar = cov_matrix.loc[selected_assets, 'Flex']
+    benchmark_var = np.var(combined_returns.loc[:, 'Flex']) * 12
 
     # start_index = len(target_stdevs) // 3
     start_index = 0
@@ -426,6 +432,11 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
 
                     weight_ref = maxenb_weights.to_numpy()
 
+                    # te_covar = calculate_tracking_error(weight_ref, cov_matrix.loc[selected_assets, selected_assets], asset_benchmark_covar, benchmark_var)
+                    # te_base = calculate_tracking_error_base(combined_returns[selected_assets], combined_returns['40/60'], weight_ref)
+                    # if round(te_covar, 3) != round(te_base, 3):
+                    #    print(f"Tracking error mismatch: {te_covar:.3f} vs {te_base:.3f}")
+
                     constraints = [
                         {'type': 'eq', 'fun': constraint_sum_to_one},
                         {'type': 'eq', 'fun': lambda w: volatility_constraint(w, selected_covar, target_vol)},
@@ -435,22 +446,24 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
                     if current_tracking_error_limit is not None:
                         constraints.append({
                             'type': 'ineq',
-                            'fun': lambda w: tracking_error_constraint(w, selected_covar, asset_benchmark_covar, benchmark_var, current_tracking_error_limit)
+                            'fun': lambda w: tracking_error_constraint(w, cov_matrix.loc[selected_assets, selected_assets], asset_benchmark_covar, benchmark_var, current_tracking_error_limit)
                         })
 
                     constraints = add_additional_constraints(constraints, additional_constraints,
                                                              library='scipy', country=country,
                                                              number_of_assets=n)
-
-                    result = minimize(
-                        enb_soft_constraint_objective,
-                        weight_ref,
-                        args=(selected_covar.to_numpy(), t_mt, weight_ref, "huber", penalty_coeff),
-                        method='SLSQP',
-                        bounds=bounds,
-                        constraints=constraints,
-                        options={'maxiter': 1000, 'ftol': 1e-10}
-                    )
+                    try:
+                        result = minimize(
+                            enb_soft_constraint_objective,
+                            weight_ref,
+                            args=(cov_matrix.loc[selected_assets, selected_assets].to_numpy(), t_mt, weight_ref, "huber", penalty_coeff),
+                            method='SLSQP',
+                            bounds=bounds,
+                            constraints=constraints,
+                            options={'maxiter': 1000, 'ftol': 1e-10}
+                        )
+                    except:
+                        print('Error in optimization')
 
                     success_tracker.append(result.success)
 
@@ -460,7 +473,7 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
                         portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_mu, selected_covar)
 
                         new_row = pd.DataFrame({'ENB': -result.fun, 'Target Vol': target_vol, 'Return': portfolio_properties['arithmetic_mu'][0],
-                                                'Sigma': portfolio_properties['sigma'], 'Tracking Error': calculate_tracking_error(result.x, selected_covar, asset_benchmark_covar, benchmark_var),
+                                                'Sigma': portfolio_properties['sigma'], 'Tracking Error': calculate_tracking_error(result.x, cov_matrix.loc[selected_assets, selected_assets], asset_benchmark_covar, benchmark_var),
                                                 'Diversification Ratio Squared': portfolio_properties['div_ratio_sqrd'], 'Effective Rank': calculator.effectiveRank,
                                                 'Herfindahl Index': portfolio_properties['herfindahl_index'], 'Herfindahl Index RC': portfolio_properties['herfindahl_index_rc'],
                                                 'ENB PCA': portfolio_properties['enb_pca'], 'Date': selected_date,
@@ -468,8 +481,8 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
                         results_df = pd.concat([results_df, new_row], ignore_index=True)
 
         if results_df.empty:
-            current_tracking_error_limit += tracking_error_increment
-            print(f"No successful optimization found. Increasing tracking error limit to {current_tracking_error_limit:.3f}")
+            epsilon += tracking_error_increment
+            print(f"No successful optimization found. Increasing epsilon to {epsilon:.3f}")
 
     formatted_date = selected_date.strftime('%Y-%m-%d')
 
@@ -580,6 +593,10 @@ def process_date(args):
 
     if additional_constraints == 'None':
         additional_constraints = None
+    elif additional_constraints == 'Yes':
+        additional_constraints = {'alternatives_upper_bound': 0.144,
+                                  'em_equities_upper_bound': 0.3,
+                                  'hy_credit_upper_bound': 0.086, }
 
     if tracking_error_constraint != 'Yes':
         tracking_error_limit = None
@@ -686,7 +703,7 @@ def run_configs(configs_to_run=None):
         os.makedirs(frontiers_dir, exist_ok=True)
         os.makedirs(plots_dir, exist_ok=True)
 
-        if not np.isnan(country):
+        if country == 'US' or country == 'UK' or country == 'JP':
             rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
             rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
             rdf.set_index('Date', inplace=True)
@@ -696,7 +713,12 @@ def run_configs(configs_to_run=None):
             er.set_index('Date', inplace=True)
             er.loc[:"1973-01-31", "Gold"] = np.nan
 
-            benchmarks = None
+            benchmark_returns = rdf.loc[:, ['Equities', 'Gov Bonds']]
+            benchmark_returns.loc[:, '40/60'] = 0.4 * benchmark_returns['Equities'] + 0.6 * benchmark_returns['Gov Bonds']
+            benchmark_returns.loc[:, '60/40'] = 0.6 * benchmark_returns['Equities'] + 0.4 * benchmark_returns['Gov Bonds']
+
+            benchmarks = (1 + benchmark_returns.loc[:, ['40/60', '60/40']]).cumprod()
+
         elif np.isnan(country):
             rdf = pd.read_excel(f"./data/2024-08-31 master_file.xlsx", sheet_name="cov")
             rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
@@ -708,7 +730,14 @@ def run_configs(configs_to_run=None):
             er.set_index('Date', inplace=True)
             er.loc[:"1973-01-31", "Gold"] = np.nan
 
-            benchmarks = read_benchmark_returns()
+            # benchmark_returns = read_benchmark_returns()
+
+            benchmark_returns = rdf.loc[:, ['DM Equities', 'Gov Bonds']]
+            benchmark_returns.loc[:, '40/60'] = 0.4 * benchmark_returns['DM Equities'] + 0.6 * benchmark_returns['Gov Bonds']
+            benchmark_returns.loc[:, '60/40'] = 0.6 * benchmark_returns['DM Equities'] + 0.4 * benchmark_returns['Gov Bonds']
+            benchmark_returns.loc[:, 'Flex'] = 0.5335 * benchmark_returns['DM Equities'] + 0.4665 * benchmark_returns['Gov Bonds']
+
+            benchmarks = (1 + benchmark_returns.loc[:, ['40/60', '60/40', 'Flex']]).cumprod()
 
         const_covar = rdf.cov()
         covar = const_covar * 12
@@ -718,9 +747,10 @@ def run_configs(configs_to_run=None):
         # portfolio_variance = np.dot(weights.T, np.dot(smaller_covar, weights))
         # portfolio_volatility = np.sqrt(portfolio_variance)
 
-        start_date = pd.Timestamp('1885-01-31')
+        # start_date = pd.Timestamp('1900-01-31')
         # start_date = pd.Timestamp('2017-01-31')
         # start_date = pd.Timestamp('1998-10-31')
+        start_date = pd.Timestamp('1875-01-31')
         dates = er.index.unique()[er.index.unique() >= start_date]
 
         with ProcessPoolExecutor(max_workers=num_cores) as executor:

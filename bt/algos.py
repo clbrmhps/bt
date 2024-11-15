@@ -1585,7 +1585,19 @@ class WeighMaxDiv(Algo):
             closest_index = (filtered_data['Sigma'] - self.target_vol).abs().idxmin()
             closest_row = filtered_data.loc[closest_index]
         else:
-            raise ValueError("No portfolio at a lower volatility available")
+            # If no lower volatility portfolios are available, check for higher volatilities
+            higher_vol_data = model_data[model_data['Sigma'] > self.target_vol]
+
+            if not higher_vol_data.empty:
+                # Find the closest match at a higher volatility
+                closest_index = (higher_vol_data['Sigma'] - self.target_vol).abs().idxmin()
+                closest_row = higher_vol_data.loc[closest_index]
+            else:
+                # Raise an error if no portfolios are available at all
+                raise ValueError("No portfolio available at or near the target volatility")
+
+        if closest_row['Sigma'] < self.target_vol:
+            closest_row['Sigma'] = self.target_vol
 
         print(f"Closest row: {closest_row['Sigma']}")
 
@@ -1630,7 +1642,8 @@ class WeighCurrentCAAF(Algo):
         return_factor=0.95,
         target_md=None,
         target_volatility=None,
-        rdf=None
+        rdf=None,
+        country=None
     ):
         super(WeighCurrentCAAF, self).__init__()
         self.lookback = lookback
@@ -1648,6 +1661,7 @@ class WeighCurrentCAAF(Algo):
         self.target_md = target_md
         self.target_volatility = target_volatility
         self.rdf = rdf
+        self.country = country
 
     def __call__(self, target):
         expected_returns = target.get_data('expected_returns')
@@ -1697,14 +1711,14 @@ class WeighCurrentCAAF(Algo):
             covar_method=self.covar_method,
             const_covar=const_covar,
             mode="frontier",
-            rdf=self.rdf
+            rdf=self.rdf,
+            country=self.country
         )
 
         target.perm['properties'] = add_row_to_target_perm(tp, target.now, target.perm['properties'])
         target.temp["weights"] = tw.dropna()
 
         return True
-
 
 class WeighCurrentCAAFMV(Algo):
     def __init__(

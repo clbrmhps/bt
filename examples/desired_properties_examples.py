@@ -8,6 +8,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import matplotlib
+import sklearn
 
 from portfolio_classes import calculations, optimization, CAAF
 
@@ -32,7 +33,7 @@ default_colors = [
 ]
 
 color_mapping = {
-    "Equities": "rgb(64, 75, 151)",
+    "Equity": "rgb(64, 75, 151)",
     "Gov Bonds": "rgb(144, 143, 74)",
     "Alternatives": "rgb(160, 84, 66)",
     "HY Credit": "rgb(154, 183, 235)",
@@ -309,6 +310,300 @@ plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
 plt.show()
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+def calc_two_stage_weights(
+        returns, exp_rets, target_md=None, target_volatility=None, epsilon=0, erc_weights=None, norm="huber", weight_bounds=(0.0, 1.0),
+        additional_constraints=None, covar_method="standard", periodicity=12, const_covar=None, initial_weights_two_stage=None, options=None,
+):
+    def return_objective(weights, exp_rets):
+        # portfolio mean
+        mean = sum(exp_rets * weights)
+        # negative because we want to maximize the portfolio mean
+        # and the optimizer minimizes metric
+        return mean
+
+    def volatility_constraint(weights, covar, target_volatility):
+        # portfolio volatility
+        port_vol = np.sqrt(np.dot(np.dot(weights, covar), weights))
+        # we want to ensure our portfolio volatility is equal to the given number
+        return port_vol - target_volatility
+
+    def weight_objective(weight, weight_ref, norm, delta=0.1):
+        weight = weight.reshape(-1, 1)
+        weight_ref = weight_ref.reshape(-1, 1)
+
+        diff = weight - weight_ref
+        if norm == 'l1':
+            return np.sum(np.abs(diff))
+        elif norm == 'l2':
+            return np.dot(diff.T, diff).squeeze()
+        elif norm == 'huber':
+            abs_diff = np.abs(diff)
+            is_small_error = abs_diff <= delta
+            squared_loss = 0.5 * (diff ** 2)
+            linear_loss = delta * (abs_diff - 0.5 * delta)
+            return np.sum(np.where(is_small_error, squared_loss, linear_loss))
+
+    if target_md is not None and target_volatility is not None:
+        raise ValueError("Both target_md and target_volatility cannot be set.")
+
+    exp_rets.dropna(inplace=True)
+    n = len(exp_rets)
+
+    # calc covariance matrix
+    if covar_method == "ledoit-wolf":
+        covar = sklearn.covariance.ledoit_wolf(returns)[0]
+    elif covar_method == "standard":
+        covar = returns.cov()
+    elif covar_method == "constant":
+        if const_covar is None:
+            raise ValueError("const_covar must be provided if covar_method is constant")
+        covar = const_covar.loc[list(exp_rets.index), list(exp_rets.index)]
+    else:
+        raise NotImplementedError("covar_method not implemented")
+
+    if covar_method == "constant":
+        stds = np.sqrt(np.diag(covar))
+    else:
+        stds = returns.std() * np.sqrt(periodicity)
+    # arithmetic_mu = exp_rets + np.square(stds) / 2
+    arithmetic_mu = exp_rets
+
+    initial_weights = np.ones([n]) / n
+
+    if initial_weights_two_stage is None:
+        initial_weights_two_stage = np.ones([n]) / n
+
+    bounds = [weight_bounds for i in range(n)]
+
+    constraints = [
+        {"type": "eq", "fun": lambda W: sum(W) - 1.0},  # sum of weights must be equal to 1
+        {"type": "eq", "fun": lambda W: volatility_constraint(W, covar, target_volatility)}  # volatility constraint
+    ]
+    if additional_constraints:
+        constraints.append({
+            'type': 'ineq',
+            'fun': lambda w: additional_constraints['alternatives_upper_bound'] - w[5],
+            'name': 'Alternatives Constraint'
+        })
+        constraints.append({
+            'type': 'ineq',
+            'fun': lambda w: (w[0] + w[1]) * additional_constraints['em_equities_upper_bound'] - w[1],
+            'name': 'EM Equities Constraint'
+        })
+        constraints.append({
+            'type': 'ineq',
+            'fun': lambda w: additional_constraints['hy_credit_upper_bound'] - w[2],
+            'name': 'HY Credit Constraint'
+        })
+
+    # arithmetic_mu.loc['Asset Class 2'] = 0.13
+    mv_return_optimum = minimize(
+        return_objective,
+        initial_weights,
+        (-arithmetic_mu,),
+        method="SLSQP",
+        constraints=constraints,
+        bounds=bounds,
+        options={'maxiter': 1000, 'ftol': 1e-6}
+    )
+    # check if success
+    if not mv_return_optimum.success:
+        raise Exception(mv_return_optimum.message)
+
+    target_return = -mv_return_optimum.fun
+
+    constraints = [
+        {"type": "eq", "fun": lambda w: sum(w) - 1.0},
+        {'type': 'ineq', 'fun': lambda w: return_objective(w, arithmetic_mu) - (1 - epsilon) * target_return},
+        {'type': 'eq', 'fun': lambda w: volatility_constraint(w, covar, target_volatility)}
+    ]
+    if additional_constraints:
+        constraints.append({
+            'type': 'ineq',
+            'fun': lambda w: additional_constraints['alternatives_upper_bound'] - w[5],
+            'name': 'Alternatives Constraint'
+        })
+        constraints.append({
+            'type': 'ineq',
+            'fun': lambda w: (w[0] + w[1]) * additional_constraints['em_equities_upper_bound'] - w[1],
+            'name': 'EM Equities Constraint'
+        })
+        constraints.append({
+            'type': 'ineq',
+            'fun': lambda w: additional_constraints['hy_credit_upper_bound'] - w[2],
+            'name': 'HY Credit Constraint'
+        })
+
+    # weight_ref = np.array(erc_weights[list(exp_rets.index)])
+    weight_ref = erc_weights
+
+    optimum = minimize(
+        weight_objective, x0=initial_weights, args=(weight_ref, norm), method='SLSQP',
+        constraints=constraints, bounds=bounds,
+        options={'maxiter': 1000, 'ftol': 1e-10}
+    )
+
+    twostage_weights = pd.Series({exp_rets.index[i]: optimum.x[i] for i in range(n)})
+    aligned_weights, aligned_mu = twostage_weights.align(arithmetic_mu, join='inner')
+    # portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_mu, covar)
+
+    return twostage_weights
+
+
+
+
+
+
+epsilon = 0.1
+lambda_coeff = 40
+additional_constraints = {'alternatives_upper_bound': 0.5,
+                          'em_equities_upper_bound': 0.3,
+                          'hy_credit_upper_bound': 0.086, }
+tracking_error_limit = None
+
+selected_assets =  ['DM Equities', 'EM Equities', 'HY Credit', 'Gov Bonds', 'Gold', 'Alternatives']
+
+selected_covar = np.array([[ 2.36364756e-02,  2.11099011e-02,  6.81061330e-03,
+         1.41877493e-04,  1.07958144e-03,  7.18911263e-04],
+       [ 2.11099011e-02,  4.61147288e-02,  7.62190506e-03,
+        -7.30186672e-04,  4.43574686e-03,  1.37810516e-03],
+       [ 6.81061330e-03,  7.62190506e-03,  7.37626267e-03,
+         8.52843164e-04,  5.41988480e-05,  2.99100916e-04],
+       [ 1.41877493e-04, -7.30186672e-04,  8.52843164e-04,
+         1.99695438e-03,  1.36140290e-04, -2.88818140e-05],
+       [ 1.07958144e-03,  4.43574686e-03,  5.41988480e-05,
+         1.36140290e-04,  3.23385708e-02,  8.13024785e-04],
+       [ 7.18911263e-04,  1.37810516e-03,  2.99100916e-04,
+        -2.88818140e-05,  8.13024785e-04,  3.10299539e-03]])
+selected_covar = pd.DataFrame(selected_covar)
+selected_covar.columns = selected_assets
+selected_covar.index = selected_assets
+
+selected_assets = selected_covar.columns
+std_devs = np.sqrt(np.diag(selected_covar))
+corr_matrix = selected_covar / np.outer(std_devs, std_devs)
+corr_matrix = pd.DataFrame(corr_matrix, index=selected_assets, columns=selected_assets)
+
+# std_devs[5] = 0.15
+
+new_covar = corr_matrix * np.outer(std_devs, std_devs)
+new_covar = pd.DataFrame(new_covar, index=selected_assets, columns=selected_assets)
+selected_covar = new_covar
+
+selected_er = np.array([0.04927393, 0.06791977, 0.03650494, 0.01930767, 0.01496375,
+       0.05514604])
+stds = np.sqrt(np.diag(selected_covar))
+arithmetic_mu = selected_er + np.square(stds) / 2
+
+arithmetic_mu = pd.Series(arithmetic_mu, index=selected_assets)
+
+sigma = 0.07
+x0 = np.full((len(selected_assets),), 1 / len(selected_assets))
+
+
+rdf = pd.read_excel(f"./data/2024-08-31 master_file.xlsx", sheet_name="cov")
+rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
+rdf = rdf.loc[rdf.loc[:, 'Date'] >= '1993-01-31', :]
+rdf.set_index('Date', inplace=True)
+
+# Calculate two-stage weights
+weights = calc_two_stage_weights(
+    rdf,
+    extended_arithmetic_mu,
+    target_volatility=sigma,
+    epsilon=0.1,
+    erc_weights=erc_weights,
+    norm="l1",
+    additional_constraints=None,
+    covar_method="constant",
+    periodicity=12,
+    const_covar=covariance_matrix,
+    initial_weights_two_stage=x0
+)
+
+# Convert to Series with asset names for consistency
+two_stage_weights = pd.Series(weights, index=asset_names)
+
+# Align the weights with `arithmetic_mu`
+aligned_weights, aligned_mu = two_stage_weights.align(arithmetic_mu, join='inner')
+
+# Calculate portfolio properties
+#portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_mu, extended_sigma)
+#print(portfolio_properties)
+
+# Plot Two-Stage Weights Portfolio
+df = pd.DataFrame({'Asset Class': two_stage_weights.index, 'Weight': two_stage_weights.values})
+plt.figure(figsize=(10, 6))
+sns.barplot(x='Asset Class', y='Weight', data=df, palette=color_mapping_hex)
+plt.title('Two-Stage Portfolio')
+plt.ylabel('Weight', fontsize=14)
+plt.xlabel('Asset Class', fontsize=14)
+plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
+plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ####################################################################################################
 ####################################################################################################
 # Low Expected Return Example
@@ -316,12 +611,12 @@ plt.show()
 target_vol = 0.07
 
 # Asset 1, Asset 2, Equities, Credit, Government Bonds, Gold
-asset_names = ["Asset Class 1", "Aktien", "High Yield", "Gov Bonds", "Gold"]
+asset_names = ["Asset Class 1", "Equity", "HY Credit", "Gov Bonds", "Gold"]
 color_mapping = {
-    "Aktien": "rgb(64, 75, 151)",
+    "Equity": "rgb(64, 75, 151)",
     "Gov Bonds": "rgb(144, 143, 74)",
     "Asset Class 1": "rgb(160, 84, 66)",
-    "High Yield": "rgb(154, 183, 235)",
+    "HY Credit": "rgb(154, 183, 235)",
     "Gold": "rgb(216, 169, 23)"
 }
 
@@ -484,3 +779,38 @@ plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
 plt.show()
 
 print("Break")
+
+# Calculate two-stage weights
+weights = calc_two_stage_weights(
+    rdf,
+    extended_arithmetic_mu,
+    target_volatility=sigma,
+    epsilon=0.1,
+    erc_weights=erc_weights,
+    norm="l1",
+    additional_constraints=None,
+    covar_method="constant",
+    periodicity=12,
+    const_covar=covariance_matrix,
+    initial_weights_two_stage=x0
+)
+
+# Convert to Series with asset names for consistency
+two_stage_weights = pd.Series(weights, index=asset_names)
+
+# Align the weights with `arithmetic_mu`
+aligned_weights, aligned_mu = two_stage_weights.align(arithmetic_mu, join='inner')
+
+# Calculate portfolio properties
+#portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_mu, extended_sigma)
+#print(portfolio_properties)
+
+# Plot Two-Stage Weights Portfolio
+df = pd.DataFrame({'Asset Class': two_stage_weights.index, 'Weight': two_stage_weights.values})
+plt.figure(figsize=(10, 6))
+sns.barplot(x='Asset Class', y='Weight', data=df, palette=color_mapping_hex)
+plt.title('Two-Stage Portfolio')
+plt.ylabel('Weight', fontsize=14)
+plt.xlabel('Asset Class', fontsize=14)
+plt.gca().yaxis.set_major_formatter(mticker.FuncFormatter(to_percent))
+plt.show()
