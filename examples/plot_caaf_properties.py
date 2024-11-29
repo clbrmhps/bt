@@ -30,7 +30,29 @@ def plot_properties(properties_folder, config_subset=None):
                      '25_current_caaf_erc': 'ERC',
                      '26_current_caaf': 'CAAF 1.0',
                      '26_max_div': 'CAAF 2.0',
-                     '26_current_caaf_erc': 'ERC'}
+                     '26_current_caaf_erc': 'ERC',
+                     '27_current_caaf': 'CAAF 1.0',
+                     '27_max_div': 'CAAF 2.0 Constrained',
+                     '27_current_caaf_erc': 'ERC',
+                     '28_current_caaf': 'CAAF 1.0',
+                     '28_max_div': 'CAAF 2.0',
+                     '28_current_caaf_erc': 'ERC',
+                     '29_current_caaf': 'CAAF 1.0',
+                     '29_max_div': 'CAAF 2.0 TE Constrained',
+                     '29_current_caaf_erc': 'ERC',
+                     '30_current_caaf': 'CAAF 1.0',
+                     '30_max_div': 'CAAF 2.0 TE Constrained',
+                     '30_current_caaf_erc': 'ERC',
+                        '31_current_caaf': 'CAAF 1.0',
+                        '31_max_div': 'CAAF 2.0',
+                        '31_current_caaf_erc': 'ERC',
+                        '32_current_caaf': 'CAAF 1.0',
+                        '32_max_div': 'CAAF 2.0',
+                        '32_current_caaf_erc': 'ERC',
+                        '33_current_caaf': 'CAAF 1.0',
+                        '33_max_div': 'CAAF 2.0 with Trigger Mechanism',
+                        '33_current_caaf_erc': 'ERC'
+                     }
 
     for file_name in os.listdir(properties_folder):
         if file_name.endswith('.csv'):
@@ -51,9 +73,11 @@ def plot_properties(properties_folder, config_subset=None):
         plt.figure(figsize=(12, 8))
 
         property_list = sorted(property_list, key=lambda x: 'erc' not in x[0])
+        property_list = [item for item in property_list if 'current_caaf' not in item[0]] + [item for item in property_list if 'current_caaf_erc' in item[0]]
+        property_list = [item for item in property_list if '32_current_caaf_erc' not in item[0]]
 
         for config_method, series in property_list:
-            if config_method == '26_current_caaf_erc':
+            if config_method == '33_current_caaf_erc':
                 plt.plot(series.index, series, label=method_labels[config_method], color=default_colors[5])
             else:
                 plt.plot(series.index, series, label=method_labels[config_method])
@@ -81,9 +105,11 @@ def plot_properties(properties_folder, config_subset=None):
         plt.figure(figsize=(12, 8))
 
         property_list = [item for item in property_list if 'erc' not in item[0]]
+        property_list = [item for item in property_list if 'current_caaf' not in item[0]] + [item for item in property_list if 'current_caaf_erc' in item[0]]
+        property_list = [item for item in property_list if '32_current_caaf_erc' not in item[0]]
 
         for config_method, series in property_list:
-            if config_method == '26_current_caaf_erc':
+            if config_method == '33_current_caaf_erc':
                 plt.plot(series.index, series, label=method_labels[config_method], color=default_colors[5])
             else:
                 plt.plot(series.index, series, label=method_labels[config_method])
@@ -108,5 +134,5 @@ def plot_properties(properties_folder, config_subset=None):
         plt.show()
 
 properties_folder = './properties'
-config_subset = [26]
+config_subset = [33, 32]
 plot_properties(properties_folder, config_subset)
