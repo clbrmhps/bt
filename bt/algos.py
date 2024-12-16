@@ -17,7 +17,9 @@ import datetime
 import bt
 from bt.core import Algo, AlgoStack, SecurityBase, is_zero
 
+from portfolio_construction.optimization import get_mv_frontier
 from analysis.drawdowns import endpoint_mdd_lookup
+from ffn.core import add_additional_constraints
 
 def pf_mu(weight, mu):
     # if weight.shape != mu.shape:
@@ -1511,6 +1513,7 @@ class WeighMaxDiv(Algo):
         target_volatility=0.07,
         tracking_error_limit=None,
         version_number=None,
+        periodicity = 12
     ):
         super(WeighMaxDiv, self).__init__()
         self.lookback = lookback
@@ -1528,6 +1531,7 @@ class WeighMaxDiv(Algo):
         self.target_md = target_md
         self.target_volatility = target_volatility
         self.version_number = version_number
+        self.periodicity = periodicity
 
     def __call__(self, target):
         expected_returns = target.get_data('expected_returns')
@@ -1569,6 +1573,21 @@ class WeighMaxDiv(Algo):
             prc = filter_columns_based_return_availability(prc)
 
         config = self.version_number
+
+        stds = np.sqrt(np.diag(const_covar.loc[available_expected_returns, available_expected_returns] * 12))
+        arithmetic_mu = expected_returns.loc[target.now].dropna() + np.square(stds) / 2
+        n = len(arithmetic_mu)
+
+        constraints = []
+        country = 'UK'
+        self.additional_constraints = add_additional_constraints(constraints, self.additional_constraints, number_of_assets=n, country=country)
+
+        if self.target_md is not None:
+            mv_frontier = get_mv_frontier(arithmetic_mu.to_numpy(),
+                                          const_covar.loc[available_expected_returns, available_expected_returns].to_numpy() * 12,
+                                          50, self.target_md, extra_constraints=self.additional_constraints)
+            self.target_volatility = mv_frontier['Optimal Portfolio Volatility']
+
         self.target_vol = self.target_volatility
 
         year = target.now.year
@@ -1703,7 +1722,7 @@ class WeighCurrentCAAF(Algo):
         tw, tp = bt.ffn.calc_current_caaf_weights(
             returns=prc.to_returns().dropna(),
             exp_rets=expected_returns.loc[target.now],
-            #target_md=self.target_md,
+            # target_md=self.target_md,
             target_volatility=self.target_volatility,
             erc_weights=erc_weights,
             weight_bounds=self.bounds,

@@ -36,7 +36,11 @@ additional_constraints = {'alternatives_upper_bound': 0.144,
                           'em_equities_upper_bound': 0.3,
                           'hy_credit_upper_bound': 0.086,
                           }
-configs_to_run = [34]
+# additional_constraints = {'alternatives_upper_bound': 0.20,
+#                           'em_equities_upper_bound': 0.3,
+#                           'hy_credit_upper_bound': 0.30,
+#                           'gold_upper_bound': 0.15}
+configs_to_run = [29]
 
 def rgb_to_hex(rgb_str):
     rgb = rgb_str.replace('rgb', '').replace('(', '').replace(')', '').split(',')
@@ -376,7 +380,7 @@ def tracking_error_constraint_cvxpy(weights, asset_covar, asset_benchmark_covar,
 
 def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds, country,
                                epsilon, lambda_coeff, rdf, benchmarks, tracking_error_limit, selected_date, additional_constraints,
-                               tracking_error_increment=0.025, max_tracking_error=None):
+                               tracking_error_increment=0.025, max_tracking_error=0.1, parameter_retry_flag=True, selected_benchmark='Flex'):
     calculator = EffectiveRankCalculator(algorithm=None,
                                          minRank=1,
                                          tickers=[],
@@ -387,20 +391,17 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
 
     n = len(arithmetic_mu)
 
-    maxenb_weights = pd.Series(x0)
     results_df = pd.DataFrame(columns=selected_assets)
-    benchmark_returns = benchmarks['Flex'].pct_change().dropna()
-
     calculator.calculate(covarianceMatrix=selected_covar.to_numpy())
 
     combined_returns = rdf.copy()
-    combined_returns['Flex'] = benchmarks['Flex'].pct_change().dropna()
+    combined_returns[selected_benchmark] = benchmarks[selected_benchmark].pct_change().dropna()
 
     combined_returns = combined_returns.dropna()
     # combined_returns = combined_returns.loc[combined_returns.index <= selected_date]
     cov_matrix = combined_returns.cov() * 12
-    asset_benchmark_covar = cov_matrix.loc[selected_assets, 'Flex']
-    benchmark_var = np.var(combined_returns.loc[:, 'Flex']) * 12
+    asset_benchmark_covar = cov_matrix.loc[selected_assets, selected_benchmark]
+    benchmark_var = np.var(combined_returns.loc[:, selected_benchmark]) * 12
 
     # start_index = len(target_stdevs) // 3
     start_index = 0
@@ -412,18 +413,23 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
 
     success_tracker = []
 
-    current_tracking_error_limit = tracking_error_limit
     erc_weights = optimization.get_erc_weights(selected_covar)
 
     while results_df.empty:
-        if max_tracking_error is not None and current_tracking_error_limit > max_tracking_error:
+        if max_tracking_error is not None and tracking_error_limit > max_tracking_error:
             print(f"Reached maximum tracking error limit: {max_tracking_error}. No successful optimizations found.")
             break
 
         success_tracker.clear()
 
+        initial_weights = np.repeat(1 / len(selected_assets), len(selected_assets))
+
         if len(target_stdevs_above) > 0:
             for target_vol in target_stdevs_above:
+
+                # if target_vol >= 0.074 and target_vol <= 0.076:
+                #     print('Break')
+
                 mv_df['Difference'] = abs(mv_df['Portfolio Std Dev'] - target_vol)
                 closest_row = mv_df.iloc[mv_df['Difference'].idxmin()]
                 target_return = closest_row['Target Return']
@@ -459,8 +465,6 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
                             linear_loss = delta * (abs_diff - 0.5 * delta)
                             return np.sum(np.where(is_small_error, squared_loss, linear_loss))
 
-                    initial_weights = np.repeat(1/len(selected_assets), len(selected_assets))
-
                     # te_covar = calculate_tracking_error(weight_ref, cov_matrix.loc[selected_assets, selected_assets], asset_benchmark_covar, benchmark_var)
                     # te_base = calculate_tracking_error_base(combined_returns[selected_assets], combined_returns['40/60'], weight_ref)
                     # if round(te_covar, 3) != round(te_base, 3):
@@ -472,10 +476,10 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
                         {'type': 'ineq', 'fun': lambda w: return_objective(w, arithmetic_mu) - (1 - epsilon) * target_return}
                     ]
 
-                    if current_tracking_error_limit is not None:
+                    if tracking_error_limit is not None:
                         constraints.append({
                             'type': 'ineq',
-                            'fun': lambda w: tracking_error_constraint(w, cov_matrix.loc[selected_assets, selected_assets], asset_benchmark_covar, benchmark_var, current_tracking_error_limit)
+                            'fun': lambda w: tracking_error_constraint(w, cov_matrix.loc[selected_assets, selected_assets], asset_benchmark_covar, benchmark_var, tracking_error_limit)
                         })
 
                     constraints = add_additional_constraints(constraints, additional_constraints,
@@ -495,7 +499,7 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
                         result = minimize(
                             weight_objective, x0=initial_weights, args=(erc_weights, norm), method='SLSQP',
                             constraints=constraints, bounds=bounds,
-                            options={'maxiter': 1000, 'ftol': 1e-10}
+                            options={'maxiter': 10000, 'ftol': 1e-10}
                         )
                     except:
                         print('Error in optimization')
@@ -504,6 +508,7 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
 
                     if result.success:
                         maxenb_weights = pd.Series({arithmetic_mu.index[i]: result.x[i] for i in range(n)})
+                        # initial_weights = maxenb_weights.to_numpy()
                         aligned_weights, aligned_mu = maxenb_weights.align(arithmetic_mu, join='inner')
                         portfolio_properties = calculate_portfolio_properties(aligned_weights, aligned_mu, selected_covar)
 
@@ -516,8 +521,11 @@ def calculate_max_enb_frontier(mv_df, arithmetic_mu, selected_covar, selected_as
                         results_df = pd.concat([results_df, new_row], ignore_index=True)
 
         if results_df.empty:
-            epsilon += tracking_error_increment
-            print(f"No successful optimization found. Increasing epsilon to {epsilon:.3f}")
+            if parameter_retry_flag:
+                tracking_error_limit += tracking_error_increment
+                print(f"No successful optimization found. Increasing tracking error limit to {tracking_error_limit:.3f}")
+            else:
+                break
 
     formatted_date = selected_date.strftime('%Y-%m-%d')
 
@@ -632,7 +640,12 @@ def process_date(args):
         additional_constraints = {'alternatives_upper_bound': 0.144,
                                   # 'gold_upper_bound': 0.1,
                                   'em_equities_upper_bound': 0.3,
-                                  'hy_credit_upper_bound': 0.086, }
+                                  'hy_credit_upper_bound': 0.086,
+                                  }
+        # additional_constraints = {'alternatives_upper_bound': 0.20,
+        #                           'em_equities_upper_bound': 0.3,
+        #                           'hy_credit_upper_bound': 0.30,
+        #                           'gold_upper_bound': 0.15}
     if tracking_error_constraint != 'Yes':
         tracking_error_limit = None
 
@@ -662,31 +675,35 @@ def process_date(args):
 
     plot_tracking_error_chart = False
     if plot_tracking_error_chart:
-        benchmark_expected_return = selected_er['DM Equities'] * 0.4 + selected_er['Gov Bonds'] * 0.6
+        benchmark_expected_return = arithmetic_mu['DM Equities'] * 0.4 + arithmetic_mu['Gov Bonds'] * 0.6
+        # benchmark_expected_return = selected_er['DM Equities'] * 0.4665 + selected_er['Gov Bonds'] * 0.5335
 
         tracking_error_limits = np.arange(0.01, 0.11, 0.01)
-        target_volatility = 0.06274
+        tracking_error_limits = np.insert(tracking_error_limits, 0, 0.00075)  # Add 0.05 at the beginning
+
+        # target_volatility = 0.06274
+        target_volatility = 0.08
 
         selected_rows = pd.DataFrame()
 
         for tracking_error_limit in tracking_error_limits:
             print(f"Running optimization with tracking error limit: {tracking_error_limit:.3f}")
-
             mv_df = perform_mean_variance_optimization(arithmetic_mu, selected_covar, selected_assets, country,
                                                        additional_constraints, tracking_error_limit, rdf,
                                                        benchmarks)
 
             results_df = calculate_max_enb_frontier(
                 mv_df, arithmetic_mu, selected_covar, selected_assets, x0, t_mt, bounds,
-                country, epsilon, lambda_coeff, rdf, benchmarks, tracking_error_limit,
-                selected_date, additional_constraints
+                country, 0.5, lambda_coeff, rdf, benchmarks, tracking_error_limit,
+                selected_date, additional_constraints, parameter_retry_flag=False, selected_benchmark='40/60'
             )
 
-            filtered_df = results_df[results_df['Sigma'] <= target_volatility]
+            if not results_df.empty:
+                filtered_df = results_df[results_df['Sigma'] <= target_volatility]
 
-            if not filtered_df.empty:
-                closest_row = filtered_df.loc[filtered_df['Sigma'].idxmax()]
-                selected_rows = selected_rows.append(closest_row, ignore_index=True)
+                if not filtered_df.empty:
+                    closest_row = filtered_df.loc[filtered_df['Sigma'].idxmax()]
+                    selected_rows = selected_rows.append(closest_row, ignore_index=True)
 
         from matplotlib.ticker import PercentFormatter
 
@@ -713,6 +730,7 @@ def process_date(args):
         plt.xlim(right=max_te * 1.1)
         plt.ylim(top=max_return * 1.1)
         plt.grid(True)
+        plt.show()
 
         plt.savefig(f'{plots_dir}/tracking_error_frontier_{selected_date.strftime("%Y%m%d")}_{config["Config"]}.png')
 
@@ -739,11 +757,11 @@ def run_configs(configs_to_run=None):
         os.makedirs(plots_dir, exist_ok=True)
 
         if country == 'US' or country == 'UK' or country == 'JP':
-            rdf = pd.read_excel(f"./data/2024-11-28 master_file_{country}.xlsx", sheet_name="cov")
+            rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
             rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
             rdf.set_index('Date', inplace=True)
 
-            er = pd.read_excel(f"./data/2024-11-28 master_file_{country}.xlsx", sheet_name="expected_gross_return")
+            er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
             er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
             er.set_index('Date', inplace=True)
             er.loc[:"1973-01-31", "Gold"] = np.nan
@@ -786,6 +804,8 @@ def run_configs(configs_to_run=None):
         # start_date = pd.Timestamp('2017-01-31')
         # start_date = pd.Timestamp('1998-10-31')
         start_date = pd.Timestamp('1875-01-31')
+        # start_date = pd.Timestamp('2009-05-31')
+        # start_date = pd.Timestamp('2024-10-31')
         dates = er.index.unique()[er.index.unique() >= start_date]
 
         with ProcessPoolExecutor(max_workers=num_cores) as executor:

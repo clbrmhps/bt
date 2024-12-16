@@ -28,12 +28,15 @@ from examples.effective_rank_calculator import EffectiveRankCalculator
 warnings.simplefilter(action='default', category=RuntimeWarning)
 set_clbrm_style(caaf_colors=True)
 
-target_stdevs = np.arange(0.01, 0.13, 0.0025)
+target_stdevs = np.arange(0.01, 0.15, 0.0025)
 
 additional_constraints = {'alternatives_upper_bound': 0.144,
                           'em_equities_upper_bound': 0.3,
                           'hy_credit_upper_bound': 0.086,}
-
+additional_constraints = {'alternatives_upper_bound': 0.20,
+                          'em_equities_upper_bound': 0.3,
+                          'hy_credit_upper_bound': 0.30,
+                          'gold_upper_bound': 0.15}
 configs_to_run = [26]
 
 def rgb_to_hex(rgb_str):

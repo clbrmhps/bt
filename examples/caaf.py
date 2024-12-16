@@ -10,7 +10,7 @@ import re
 import warnings
 import bt
 import seaborn as sns
-from matplotlib.ticker import FuncFormatter
+from matplotlib.ticker import PercentFormatter
 import quantstats as qs
 import os
 
@@ -26,7 +26,7 @@ def get_config(config_number):
     return [config for config in all_configs if config['Config'] == config_number][0]
 
 all_configs = read_configs()
-num_config = 34
+num_config = 57
 selected_config = get_config(num_config)
 
 version_number = selected_config['Config']
@@ -54,7 +54,12 @@ elif additional_constraints == 'Yes':
     additional_constraints = {'alternatives_upper_bound': 0.144,
                               # 'gold_upper_bound': 0.1,
                               'em_equities_upper_bound': 0.3,
-                              'hy_credit_upper_bound': 0.086,}
+                              'hy_credit_upper_bound': 0.086,
+                              }
+    # additional_constraints = {'alternatives_upper_bound': 0.20,
+    #                      'em_equities_upper_bound': 0.3,
+    #                      'hy_credit_upper_bound': 0.30,
+    #                      'gold_upper_bound': 0.15}
 
 two_stage_target_md = "frontier_only"
 
@@ -217,7 +222,7 @@ def drop_initial_duplicates(df: pd.DataFrame) -> pd.DataFrame:
 # Read in Files
 
 if country == 'US' or country == 'UK' or country == 'JP':
-    rdf = pd.read_excel(f"./data/2024-11-28 master_file_{country}.xlsx", sheet_name="cov")
+    rdf = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="cov")
     rdf['Date'] = pd.to_datetime(rdf['Date'], format='%d/%m/%Y')
     rdf.set_index('Date', inplace=True)
     # rdf.dropna(inplace=True)
@@ -226,7 +231,7 @@ if country == 'US' or country == 'UK' or country == 'JP':
     const_covar_scaled = const_covar * 12
     const_covar_scaled.to_parquet("const_covar_scaled.parquet")
 
-    er = pd.read_excel(f"./data/2024-11-28 master_file_{country}.xlsx", sheet_name="expected_gross_return")
+    er = pd.read_excel(f"./data/2023-10-26 master_file_{country}.xlsx", sheet_name="expected_gross_return")
     er['Date'] = pd.to_datetime(er['Date'], format='%d/%m/%Y')
     er.set_index('Date', inplace=True)
     # er.dropna(inplace=True)
@@ -253,16 +258,13 @@ elif np.isnan(country):
     er.drop(columns=['Cash'], inplace=True)
     # er.dropna(inplace=True)
 
-def to_percent(y, position):
-    return f"{y * 100:.0f}%"
-
-plt.figure(figsize=(15, 6))
+plt.figure(figsize=(16, 6))
 sns.lineplot(data=er, dashes=False, palette=color_palette)
-plt.gca().yaxis.set_major_formatter(FuncFormatter(to_percent))
+plt.gca().yaxis.set_major_formatter(PercentFormatter(xmax=1, decimals=0))
 plt.xlabel("")
-plt.ylabel("Expected Return")
-plt.title("Expected Returns of Asset Classes")
-plt.savefig(f'./images/expected_returns_asset_classes_{country}.png', format='png', dpi=300)
+plt.ylabel("")
+plt.title("")
+plt.savefig(f'./images/expected_returns_asset_classes_{country}.png', format='png')
 plt.legend(loc='lower center', bbox_to_anchor=(0.5, -0.2), ncol=3)
 plt.tight_layout()
 plt.show()
@@ -290,12 +292,12 @@ pdf = 100*np.cumprod(1+rdf)
 pdf_melted = pdf.reset_index().melt(id_vars=['Date'], value_name='Price', var_name='Asset')
 
 # Plot using seaborn
-plt.figure(figsize=(15, 6))
+plt.figure(figsize=(16, 6))
 sns.lineplot(x='Date', y='Price', hue='Asset', data=pdf_melted, palette=color_palette)
 plt.xlabel("")
 plt.yscale('log')  # Log scale
-plt.title('Asset Prices Over Time')
-plt.savefig(f'./images/asset_prices_{country}.png', format='png', dpi=300)
+plt.title('')
+plt.savefig(f'./images/asset_prices_{country}.png', format='png')
 plt.tight_layout()
 plt.show()
 
@@ -312,6 +314,11 @@ weighERCAlgo = bt.algos.WeighERC(
     lag = pd.DateOffset(months=0)
 )
 
+additional_constraints = {'alternatives_upper_bound': 0.144,
+                          # 'gold_upper_bound': 0.1,
+                          'em_equities_upper_bound': 0.3,
+                          'hy_credit_upper_bound': 0.086,
+                          }
 # additional_constraints = {'alternatives_upper_bound': 0.144,
 #                           'em_equities_upper_bound': 0.3,
 #                           'hy_credit_upper_bound': 0.086,}
@@ -329,7 +336,8 @@ weighMaxDivAlgo = bt.algos.WeighMaxDiv(
     additional_constraints=additional_constraints,
     mode="long_term",
     version_number=version_number,
-    target_volatility=target_volatility,
+    target_volatility=target_volatility+0.005,
+    target_md=None
 )
 
 weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
@@ -345,6 +353,8 @@ weighCurrentCAAFAlgo = bt.algos.WeighCurrentCAAF(
     additional_constraints=additional_constraints,
     mode="long_term",
     target_volatility=target_volatility +0.038,
+    # target_volatility=target_volatility+0.02,
+    target_md=None,
     rdf=rdf,
     country=country
 )
@@ -424,7 +434,8 @@ rebalAlgo = bt.algos.Rebalance()
 
 # common_start_date = '1962-04-30'
 # common_start_date = '1900-01-31'
-common_start_date = '1875-01-31'
+# common_start_date = '1875-01-31'
+common_start_date = '1962-04-30'
 
 tolerance = 0.2
 strat_current_caaf = bt.Strategy(
@@ -627,36 +638,28 @@ def plot_stacked_area(df, method=None, country=None, version_number=None):
     y = df.to_numpy().T
 
     method_labels = {'current_caaf': 'CAAF 1.0',
-                     'erc': 'ERC', 'equal_weights': 'Equal Weights',
+                     'erc': 'ERC', 'equal_weights': 'Equal eights',
                      '6040': '60/40', '4060': '40/60',
                      'max_div': 'CAAF 2.0', 'current_caaf_mv': 'Current CAAF MV',
                      'current_caaf_erc': 'Current CAAF ERC'}
-
-    fig, ax = plt.subplots(figsize=(18, 10))
-
+    fig, ax = plt.subplots(figsize=(16, 10))
     ax.stackplot(x, y, labels=df.columns, colors=[tuple_color_mapping[col] for col in df.columns], alpha=0.6)
-
     ax.xaxis.set_major_locator(mdates.MonthLocator(interval=48))
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
-
-    ax.set_ylabel("Weight", fontsize=18)
-
-    ax.tick_params(axis='x', rotation=45, labelsize=18)
-    ax.tick_params(axis='y', labelsize=18)
-
+    ax.set_ylabel("")
+    ax.tick_params(axis='x', rotation=45)
+    ax.tick_params(axis='y')
     ax.yaxis.set_major_formatter(FuncFormatter(percentage_formatter))
     ax.set_ylim(0, 1)
-
     handles, labels = ax.get_legend_handles_labels()
-    ax.legend(handles, labels, loc='upper left', bbox_to_anchor=(1, 1), fontsize=18)
+    ax.legend(handles, labels, loc='upper left', bbox_to_anchor=(1, 1))
 
-    plt.title(f"{method_labels[method]} Weights Over Time", fontsize=20)
-
+    plt.title(f"")
     plt.tight_layout()
 
-    plt.ylabel("Weight")
+    plt.ylabel("")
     if method is not None and country is not None and version_number is not None:
-        plt.savefig(f"./images/weights_{method}_{country}_{version_number}.png", dpi=300)
+        plt.savefig(f"./images/weights_{method}_{country}_{version_number}.png")
 
     plt.show()
 
@@ -681,24 +684,24 @@ for method in ['Current CAAF', 'Two Stage', 'ERC', 'Equal Weights', '60/40', '40
 ####################################################################################################
 # ENB Comparison Chart
 
-enb_df = pd.DataFrame()
-for method in ['Current CAAF', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC']:
-    if method in res_target.backtests:
-        current_series = res_target.backtests[method].strategy.perm['properties']['enb']
-        current_series.name = f'{method}'
-        enb_df = pd.concat([enb_df, current_series], axis=1)
-
-enb_df.index = pd.to_datetime(enb_df.index)
-
-enb_df.plot(figsize=(10, 6))
-
-plt.title('Effective Number of Bets Over Time')
-plt.xlabel('Date')
-plt.ylabel('Effective Number of Bets')
-
-plt.legend(loc='best')
-plt.grid(True)
-plt.show()
+# enb_df = pd.DataFrame()
+# for method in ['Current CAAF', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC']:
+#     if method in res_target.backtests:
+#         current_series = res_target.backtests[method].strategy.perm['properties']['enb']
+#         current_series.name = f'{method}'
+#         enb_df = pd.concat([enb_df, current_series], axis=1)
+#
+# enb_df.index = pd.to_datetime(enb_df.index)
+#
+# enb_df.plot(figsize=(16, 6))
+#
+# plt.title('Effective Number of Bets Over Time')
+# plt.xlabel('Date')
+# plt.ylabel('Effective Number of Bets')
+#
+# plt.legend(loc='best')
+# plt.grid(True)
+# plt.show()
 
 ####################################################################################################
 # Properties Chart
@@ -716,17 +719,16 @@ for method in ['Current CAAF', 'Max Div', 'Current CAAF MV', 'Current CAAF ERC']
         current_df.to_csv(file_path)
 
         # Plotting
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(16, 6))
         plt.plot(current_df.index, current_df['caaf_implied_epsilon'])
-        plt.xlabel('', fontsize=16)
-        plt.ylabel('CAAF Implied Epsilon', fontsize=16)
+        plt.xlabel('')
+        plt.ylabel('')
 
-        # Set the formatter
-        formatter = FuncFormatter(to_percentage)
-        plt.gca().yaxis.set_major_formatter(formatter)
+        plt.gca().yaxis.set_major_formatter(PercentFormatter(xmax=1, decimals=0))
 
-        plt.title(f'{method} Implied Epsilon over time', fontsize=18)
+        plt.title(f'')
         plt.grid(True)
+        plt.tight_layout()
         plt.show()
 
 ################################################################################
@@ -755,8 +757,8 @@ if 'Max Div' in bt_keys:
     combined_prices_long.loc[:, 'Method'] = combined_prices_long.loc[:, 'Method'].replace('Max Div', 'CAAF 2.0')
 
 # Create figure and set size
-plt.figure(figsize=(14, 6))
-plt.title('Price Series Over Time', fontsize=18)
+plt.figure(figsize=(16, 6))
+plt.title('')
 sns.lineplot(
     data=combined_prices_long,
     x='index',
@@ -765,10 +767,10 @@ sns.lineplot(
     hue_order=['CAAF 1.0', 'CAAF 2.0', '40/60']  # Specify the order here
 )
 plt.yscale("log")
-plt.xlabel("", fontsize=16)
-plt.ylabel("Prices", fontsize=16)
-plt.xticks(fontsize=16)
-plt.yticks(fontsize=16)
+plt.xlabel("")
+plt.ylabel("")
+plt.xticks()
+plt.yticks()
 plt.tight_layout()
 plt.savefig(f"./images/price_series_log_scale_{country}_{version_number}.png", dpi=300)
 plt.show()
@@ -1057,37 +1059,37 @@ if 'Current CAAF' in bt_keys and 'Two Stage' in bt_keys:
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 
+fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(16, 6))  # 16 is width, adjust height as needed
+
 if 'Current CAAF' in bt_keys:
     mean_turnover = backtest_current_caaf.turnover.mean()
     print(f"Mean turnover for CAAF 1.0: {mean_turnover:.2%}")
-    ax = backtest_current_caaf.turnover.plot()
-    ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))  # Format y-axis as a percentage
-    # ax.text(0.95, 0.9, f'Mean: {mean_turnover:.2%}', transform=ax.transAxes,
-    #         verticalalignment='top', horizontalalignment='right',
-    #         fontsize=16)
-    ax.set_title("CAAF 1.0 Turnover", fontsize=16)  # Set title with font size 18
-    ax.tick_params(axis='both', which='major', labelsize=14)  # Set tick label font size to 14
-    ax.tick_params(axis='x', rotation=0)  # Make x-axis labels horizontal
-    ax.set_ylabel("Turnover (%)", fontsize=16)  # Set y-axis label font size to 16
-    plt.savefig(f"./images/turnover_current_caaf_{country}_{version_number}.png", dpi=300)
-    plt.tight_layout()
-    plt.show()
+
+    # Plot on the first axis
+    ax = axes[0]
+    backtest_current_caaf.turnover.plot(ax=ax)
+    ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0))  # Format y-axis as percentage
+    ax.set_title("CAAF 1.0")
+    ax.tick_params(axis='both', which='major')
+    ax.tick_params(axis='x', rotation=0)
+    ax.set_ylabel("")
 
 if 'Max Div' in bt_keys:
     mean_turnover = backtest_max_div.turnover.mean()
     print(f"Mean turnover for CAAF 2.0: {mean_turnover:.2%}")
-    ax = backtest_max_div.turnover.plot()
-    ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))  # Format y-axis as a percentage
-    # ax.text(0.95, 0.9, f'Mean: {mean_turnover:.2%}', transform=ax.transAxes,
-    #         verticalalignment='top', horizontalalignment='right',
-    #         fontsize=16)
-    ax.set_title("CAAF 2.0 Turnover", fontsize=16)  # Set title with font size 18
-    ax.tick_params(axis='both', which='major', labelsize=14)  # Set tick label font size to 14
-    ax.tick_params(axis='x', rotation=0)  # Make x-axis labels horizontal
-    ax.set_ylabel("Turnover (%)", fontsize=16)  # Set y-axis label font size to 16
-    plt.savefig(f"./images/turnover_max_div_{country}_{version_number}.png", dpi=300)
-    plt.tight_layout()
-    plt.show()
+
+    # Plot on the second axis
+    ax = axes[1]
+    backtest_max_div.turnover.plot(ax=ax)
+    ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0))
+    ax.set_title("CAAF 2.0")
+    ax.tick_params(axis='both', which='major')
+    ax.tick_params(axis='x', rotation=0)
+    ax.set_ylabel("")
+
+plt.tight_layout()
+plt.savefig(f"./images/turnover_comparison_{country}_{version_number}.png")
+plt.show()
 
 ####################################################################################################
 # Transactions Figures
